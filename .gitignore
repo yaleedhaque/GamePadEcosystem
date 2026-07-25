@@ -1,0 +1,46 @@
+# ============================================
+# GamePadEcosystem .gitignore
+# ============================================
+
+# ── Windows Server ──
+server/src/GamePadServer/bin/
+server/src/GamePadServer/obj/
+server/publish/
+*.user
+*.suo
+.vs/
+
+# ── Android Client ──
+client/.gradle/
+client/app/build/
+client/local.properties
+client/.idea/
+*.iml
+*.apk
+*.aab
+
+# ── Build Artifacts ──
+build/windows/output/
+build/android/output/
+*.msi
+*.exe
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ── Logs ──
+logs/*.log
+
+# ── Secrets ──
+*.pem
+*.key
+.env
