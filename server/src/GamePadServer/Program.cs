@@ -13,6 +13,24 @@ internal static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+        {
+            FileLog($"FATAL: {e.ExceptionObject}");
+        };
+
+        try
+        {
+            Run(args);
+        }
+        catch (Exception ex)
+        {
+            FileLog($"FATAL (top-level): {ex}");
+            throw;
+        }
+    }
+
+    private static void Run(string[] args)
+    {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
 
         Console.ForegroundColor = ConsoleColor.Cyan;
@@ -96,10 +114,18 @@ internal static class Program
         // Main loop
         while (true)
         {
-            if (Console.KeyAvailable)
+            try
             {
-                var key = Console.ReadKey(true);
-                if (key.Key == ConsoleKey.Q) break;
+                if (Console.KeyAvailable)
+                {
+                    var key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Q) break;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // No console attached (e.g. launched from a startup shortcut) —
+                // Console.KeyAvailable throws here. Keep the server alive.
             }
             Thread.Sleep(50);
         }
@@ -132,10 +158,37 @@ internal static class Program
 
     private static void Log(string tag, string message)
     {
+        FileLog($"[{tag}] {message}");
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.Write($"[{tag}] ");
         Console.ResetColor();
         Console.WriteLine(message);
+    }
+
+    /// <summary>
+    /// Mirrors console output to a log file so the server can be diagnosed
+    /// even when launched without a visible console (startup shortcut, etc.).
+    /// The file is capped and rotated so it can never grow unbounded.
+    /// </summary>
+    private static readonly object _logLock = new();
+
+    private static void FileLog(string line)
+    {
+        try
+        {
+            lock (_logLock)
+            {
+                var logPath = Path.Combine(AppContext.BaseDirectory, "server.log");
+                var fi = new FileInfo(logPath);
+                if (fi.Exists && fi.Length > 1_048_576) // 1 MB cap
+                {
+                    try { File.Copy(logPath, logPath + ".old", overwrite: true); } catch { }
+                    try { File.Delete(logPath); } catch { }
+                }
+                File.AppendAllText(logPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {line}{Environment.NewLine}");
+            }
+        }
+        catch { }
     }
 
     private const string Logo = @"

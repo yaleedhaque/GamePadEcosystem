@@ -1,16 +1,17 @@
-name: Build and Release Server
+name: Build and Release
 
 on:
   push:
     tags:
       - 'v*'
 
-jobs:
-  build:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+permissions:
+  contents: write
 
+jobs:
+  build-server:
+    name: Build Windows Server
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,17 +21,69 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore
-        run: dotnet restore server/src/GamePadServer/GamePadServer.csproj
-
-      - name: Build
-        run: dotnet publish server/src/GamePadServer/GamePadServer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ./release
+      - name: Publish server
+        run: dotnet publish server/src/GamePadServer/GamePadServer.csproj -c Release -o ./release
 
       - name: Zip release
         run: Compress-Archive -Path ./release/* -DestinationPath GamePadServer-${{ github.ref_name }}-win-x64.zip
 
-      - name: Create Release
+      - name: Upload server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-zip
+          path: GamePadServer-${{ github.ref_name }}-win-x64.zip
+
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build APK
+        working-directory: client
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Rename APK
+        run: cp client/app/build/outputs/apk/release/app-release.apk GamePadController-${{ github.ref_name }}.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: GamePadController-${{ github.ref_name }}.apk
+
+  release:
+    name: Create Release
+    needs: [build-server, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download server artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: server-zip
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: GamePadServer-${{ github.ref_name }}-win-x64.zip
+          files: |
+            GamePadServer-*.zip
+            GamePadController-*.apk
           generate_release_notes: true
