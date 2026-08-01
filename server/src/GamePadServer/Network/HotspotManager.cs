@@ -37,16 +37,102 @@ public sealed class HotspotManager : IDisposable
 
         EnsureWifiAdapterEnabled();
 
+        // Ensure the always-connected loopback adapter exists. Windows refuses to
+        // start the hotspot without a valid connection profile, and it rejects
+        // remembered-but-disconnected Wi-Fi networks. The loopback adapter is a
+        // real, always-connected virtual NIC, so the hotspot works even with no
+        // Wi-Fi / cellular / Ethernet connected at all.
+        LoopbackAdapter.EnsureCreated();
+
         if (TryTetheringApi())
+        {
+            DisableAutoShutdown();
+            StartKeepAlive();
             return true;
+        }
 
         if (CheckHostedNetworkSupport() && TryHostedNetwork())
+        {
+            StartKeepAlive();
             return true;
+        }
 
         if (EnableMobileHotspot())
+        {
+            DisableAutoShutdown();
+            StartKeepAlive();
             return true;
+        }
 
         return UseExistingLan();
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // HOTSPOT KEEP-ALIVE
+    // ════════════════════════════════════════════════════════════════════
+    // Windows kills the Mobile Hotspot after ~5 minutes with no connected
+    // device. Disable that and optionally restart the hotspot if it drops.
+
+    private void DisableAutoShutdown()
+    {
+        try
+        {
+            RunCmd("reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Services\\icssvc\\Settings\" /v PeerlessTimeoutEnabled /t REG_DWORD /d 0 /f");
+            Log("Hotspot", "Disabled hotspot auto-shutdown (PeerlessTimeoutEnabled=0)");
+        }
+        catch (Exception ex)
+        {
+            Log("Hotspot", $"Auto-shutdown disable: {ex.Message}");
+        }
+    }
+
+    private CancellationTokenSource? _keepAliveCts;
+
+    private void StartKeepAlive()
+    {
+        if (_keepAliveCts != null) return;
+        _keepAliveCts = new CancellationTokenSource();
+        var token = _keepAliveCts.Token;
+
+        Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(30_000, token);
+                    if (!IsHotspotStillUp() && !UseExistingLan())
+                    {
+                        Log("Hotspot", "Hotspot dropped — restarting...");
+                        var restarted = TryTetheringApi() ||
+                                       (CheckHostedNetworkSupport() && TryHostedNetwork()) ||
+                                       EnableMobileHotspot();
+                        if (restarted) DisableAutoShutdown();
+                    }
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    Log("Hotspot", $"Keep-alive: {ex.Message}");
+                }
+            }
+        });
+    }
+
+    private bool IsHotspotStillUp()
+    {
+        if (!_isRunning) return false;
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+            var desc = ni.Description;
+            if (desc.Contains("Microsoft Wi-Fi Direct") ||
+                desc.Contains("Wi-Fi Direct") ||
+                desc.Contains("Local Area Connection*") ||
+                desc.Contains("Mobile Hotspot"))
+                return true;
+        }
+        return false;
     }
 
     public void Dispose()
@@ -234,19 +320,27 @@ try {
         Write-Host ""Using active connection: $($connectionProfile.ProfileName)""
     }
 
-    # Priority 2: Any saved WLAN profile (works even when WiFi is disconnected)
+    # Priority 2: Any profile that is actually connected (WiFi/Ethernet/cellular)
     if (-not $connectionProfile) {
-        $allProfiles = [Windows.Networking.Connectivity.NetworkInformation]::GetConnectionProfiles()
-        foreach ($p in $allProfiles) {
-            if ($p.IsWlanConnectionProfile) {
-                $connectionProfile = $p
-                Write-Host ""Using saved WLAN profile: $($p.ProfileName)""
-                break
-            }
+        $conn = @([Windows.Networking.Connectivity.NetworkInformation]::GetConnectionProfiles() | Where-Object { $_.GetNetworkConnectivityLevel() -ne 'Disconnected' })
+        if ($conn.Count -gt 0) {
+            $connectionProfile = $conn[0]
+            Write-Host ""Using connected profile: $($connectionProfile.ProfileName)""
         }
     }
 
-    # Priority 3: Any profile at all
+    # Priority 3: The loopback adapter (always connected — offline hotspot trick).
+    # Windows rejects remembered-but-disconnected Wi-Fi profiles, so when the PC
+    # has NO active network at all we hand it the virtual loopback adapter.
+    if (-not $connectionProfile) {
+        $lb = @([Windows.Networking.Connectivity.NetworkInformation]::GetConnectionProfiles() | Where-Object { $_.ProfileName -eq '" + LoopbackAdapter.DisplayName + @"' })
+        if ($lb.Count -gt 0) {
+            $connectionProfile = $lb[0]
+            Write-Host ""Using loopback adapter: $($connectionProfile.ProfileName)""
+        }
+    }
+
+    # Priority 4: Any profile at all
     if (-not $connectionProfile) {
         $allProfiles = [Windows.Networking.Connectivity.NetworkInformation]::GetConnectionProfiles()
         if ($allProfiles.Count -gt 0) {
@@ -267,6 +361,7 @@ try {
 
     if ($state -eq 'On') {
         Write-Host 'HOTSPOT_ACTIVE'
+        try { $null = Await ($tetheringManager.DisableNoConnectionsTimeoutAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult]) } catch {}
         try { while ($true) { Start-Sleep -Seconds 5 } } catch { }
     }
 
@@ -301,6 +396,8 @@ try {
 
     if ($started -or $finalState -eq 'On') {
         Write-Host 'HOTSPOT_ACTIVE'
+        # Keep the hotspot alive even with no connected devices.
+        try { $null = Await ($tetheringManager.DisableNoConnectionsTimeoutAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult]) } catch {}
         # Keep process alive to maintain hotspot
         try { while ($true) { Start-Sleep -Seconds 5 } } catch { }
     } else {

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0-blue?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.1.0-blue?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Android-0078d4?style=for-the-badge" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="License">
   <img src="https://img.shields.io/badge/.NET-8-purple?style=for-the-badge&logo=dotnet" alt=".NET 8">
@@ -60,14 +60,14 @@ Turn your Android phones into **wireless Xbox 360 controllers** for your Windows
 ### Windows Server
 
 1. Go to **[Releases](https://github.com/yaleedhaque/GamePadEcosystem/releases/latest)**
-2. Download **`GamePadServer-v1.0.0-win-x64.zip`**
+2. Download **`GamePadServer-v1.1.0-win-x64.zip`**
 3. Extract anywhere
-4. Run **`GamePadServer.exe`** as Administrator
+4. Run **`StartServer.bat`** (or `GamePadServer.exe`) as Administrator
 
 ### Android Client
 
 1. Go to **[Releases](https://github.com/yaleedhaque/GamePadEcosystem/releases/latest)**
-2. Download **`GamePadController-v1.0.0.apk`**
+2. Download **`GamePadController-v1.1.0.apk`**
 3. Transfer to your Android phone
 4. Install (enable "Install from unknown sources" if prompted)
 
@@ -75,15 +75,17 @@ Turn your Android phones into **wireless Xbox 360 controllers** for your Windows
 
 ## Quick Start
 
-1. **Enable WiFi Hotspot** on one Android phone (or use a router)
-2. **Connect your PC** to that hotspot network
-3. **Run GamePadServer.exe** on the PC (as Administrator)
+1. **Run GamePadServer.exe** on the PC (as Administrator)
+2. The server **automatically starts a WiFi hotspot** (`GamePad_Server` / `gamepad123`)
+   - If the PC has internet, it uses the native Windows hotspot
+   - If the PC is offline, it force-enables the hotspot using a virtual loopback adapter (no internet required)
+3. **Connect each phone** to the `GamePad_Server` WiFi network
 4. **Install & open** the GamePad Controller app on each phone
-5. The app **auto-discovers** the server — tap **Scan**
+5. The app **auto-discovers** the server — no IP entry needed
 6. Each phone becomes a **virtual Xbox 360 controller**
 7. Open any emulator — it detects the controllers natively
 
-**That's it.** No IP addresses to type, no ports to configure.
+**That's it.** No IP addresses to type, no ports to configure. Fully offline — no router, no cloud.
 
 ---
 
@@ -93,7 +95,8 @@ Turn your Android phones into **wireless Xbox 360 controllers** for your Windows
 |---------|---------|
 | **Multiplayer** | Up to 8 phones simultaneously |
 | **Auto-Discovery** | No manual IP entry — UDP broadcast finds the server |
-| **Hotspot Loopback** | Phone hosting the hotspot can also be a controller |
+| **One-Click Hotspot** | Server auto-starts a WiFi hotspot; works even with no internet (loopback-adapter trick) |
+| **Self-Repairing** | Watchdog restarts the hotspot if it drops; auto-shutdown disabled |
 | **Sub-5ms Latency** | UDP raw sockets + binary 34-byte packets |
 | **100% Emulator Compat** | ViGEmBus creates native Xbox 360 controllers |
 | **Motion Controls** | Gyroscope + accelerometer for steering/aiming |
@@ -101,6 +104,13 @@ Turn your Android phones into **wireless Xbox 360 controllers** for your Windows
 | **Layout Editor** | Drag-to-reposition buttons, resize, toggle visibility |
 | **Haptic Feedback** | Button press vibration on every touch |
 | **Zero Drift Protection** | Timeout disconnects zero all inputs automatically |
+
+## What's New in v1.1.0
+
+- **Hotspot actually starts.** Fixed a broken PowerShell script inside the server that prevented the Windows hotspot from launching (a `//` comment was being executed as code).
+- **Works offline.** New virtual loopback adapter lets the hotspot start even when the PC has no internet connection at all.
+- **No more discovery spam.** The server no longer mistakes its own broadcasts for new devices — the previous infinite loop that flooded `server.log` with phantom "Android Device" entries is fixed.
+- **Stable logs.** Logs are capped at 1MB with automatic rotation.
 
 ---
 
@@ -166,8 +176,8 @@ dotnet build -c Release
 # Run
 dotnet run
 
-# Publish single executable
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ./publish
+# Publish release (framework-dependent, small footprint)
+dotnet publish -c Release -o ./publish
 ```
 
 Or open `GamePadEcosystem.sln` in Visual Studio 2022 and press F5.
@@ -177,14 +187,14 @@ Or open `GamePadEcosystem.sln` in Visual Studio 2022 and press F5.
 ```bash
 cd client
 
-# Build debug APK
-./gradlew assembleDebug
+# Build release APK (signed with debug key, installable on any phone)
+./gradlew assembleRelease
 
 # APK output
-# app/build/outputs/apk/debug/app-debug.apk
+# app/build/outputs/apk/release/app-release.apk
 
 # Install on connected phone
-adb install app/build/outputs/apk/debug/app-debug.apk
+adb install app/build/outputs/apk/release/app-release.apk
 ```
 
 Or open `client/` folder in Android Studio → Build → Build APK.
@@ -210,9 +220,10 @@ GamePadEcosystem/
 ├── server/src/GamePadServer/     Windows Server (.NET 8)
 │   ├── Core/Protocol.cs          Binary packet format
 │   ├── Core/ClientManager.cs     Multi-device slot management
-│   ├── Network/DiscoveryService  UDP auto-discovery
+│   ├── Network/DiscoveryService  UDP auto-discovery (self-broadcast safe)
 │   ├── Network/InputListener     High-perf UDP receiver
 │   ├── Network/HotspotManager    4-strategy hotspot detection
+│   ├── Network/LoopbackAdapter   Offline hotspot support (virtual NIC)
 │   ├── VirtualController/        ViGEmBus Xbox 360 mapping
 │   └── UI/ServerHud              Real-time console display
 │

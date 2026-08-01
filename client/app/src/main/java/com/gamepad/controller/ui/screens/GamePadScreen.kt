@@ -130,7 +130,7 @@ fun GamePadScreen(
 
         // ═══ GAMEPAD CONTROLS ═══
         Box(Modifier.fillMaxSize()) {
-            layout.buttons.filter { it.visible }.forEach { btn ->
+            layout.buttons.filter { it.visible && it.isVisibleIn(profile) }.forEach { btn ->
                 val posX = (btn.x * screenW).dp
                 val posY = (btn.y * screenH).dp
 
@@ -397,15 +397,17 @@ private fun EditableTrigger(
 ) {
     val context = LocalContext.current
     val size = btn.sizeDp
+    val widthDp = size * 2.2f
+    val heightDp = size * 0.75f
 
-    Box(modifier = Modifier.width(size.dp).height((size * 1.5f).dp)
-        .then(if (isSelected) Modifier.border(2.dp, Color(0xFF00E5FF), RoundedCornerShape(8.dp)) else Modifier)
-        .clip(RoundedCornerShape(8.dp)).background(Color.White.copy(alpha = 0.08f))
+    Box(modifier = Modifier.width(widthDp.dp).height(heightDp.dp)
+        .then(if (isSelected) Modifier.border(2.dp, Color(0xFF00E5FF), RoundedCornerShape(10.dp)) else Modifier)
+        .clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.10f))
         .pointerInput(isEditMode) {
             if (!isEditMode) {
                 detectDragGestures { change, dragAmount ->
                     change.consume()
-                    onValueChanged((value - dragAmount.y / (size * 1.5f)).coerceIn(0f, 1f))
+                    onValueChanged((value + dragAmount.x / widthDp).coerceIn(0f, 1f))
                 }
             } else {
                 detectDragGestures { change, dragAmount ->
@@ -417,12 +419,12 @@ private fun EditableTrigger(
         }
         .clickable(enabled = isEditMode) { onSelect() }
     ) {
-        Box(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-            .fillMaxHeight(value.coerceIn(0.01f, 1f))
-            .clip(RoundedCornerShape(8.dp)).background(Color.White.copy(alpha = 0.4f)))
+        Box(modifier = Modifier.align(Alignment.CenterStart).fillMaxHeight()
+            .fillMaxWidth(value.coerceIn(0.01f, 1f))
+            .clip(RoundedCornerShape(10.dp)).background(Color(0xFF00E5FF).copy(alpha = 0.45f)))
         if (isEditMode) Icon(Icons.Filled.OpenWith, null, tint = Color(0xFF00E5FF),
             modifier = Modifier.align(Alignment.Center).size(16.dp))
-        else Text(btn.label, color = Color.White.copy(alpha = 0.35f), fontSize = 9.sp,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp))
+        else Text(btn.label, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp,
+            fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
     }
 }

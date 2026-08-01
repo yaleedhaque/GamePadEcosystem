@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.widget.Toast
 import com.gamepad.controller.network.Protocol
+import com.gamepad.controller.profiles.ControllerProfile
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -26,11 +27,25 @@ data class ButtonLayout(
     enum class ElementType {
         STICK_LEFT,
         STICK_RIGHT,
+        STICK_CLICK_L, STICK_CLICK_R,
         FACE_A, FACE_B, FACE_X, FACE_Y,
         DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT,
         BUMPER_L, BUMPER_R,
         TRIGGER_L, TRIGGER_R,
         CENTER_BACK, CENTER_GUIDE, CENTER_START
+    }
+
+    /**
+     * Whether this control is shown for the given controller profile.
+     */
+    fun isVisibleIn(profile: ControllerProfile): Boolean = when (this.type) {
+        ElementType.STICK_LEFT, ElementType.STICK_RIGHT,
+        ElementType.STICK_CLICK_L, ElementType.STICK_CLICK_R -> profile.showSticks
+        ElementType.FACE_A, ElementType.FACE_B, ElementType.FACE_X, ElementType.FACE_Y -> profile.showFaceButtons
+        ElementType.DPAD_UP, ElementType.DPAD_DOWN, ElementType.DPAD_LEFT, ElementType.DPAD_RIGHT -> profile.showDpad
+        ElementType.BUMPER_L, ElementType.BUMPER_R -> profile.showBumpers
+        ElementType.TRIGGER_L, ElementType.TRIGGER_R -> profile.showTriggers
+        ElementType.CENTER_BACK, ElementType.CENTER_GUIDE, ElementType.CENTER_START -> profile.showCenterButtons
     }
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -88,25 +103,27 @@ data class ControllerLayout(
 
 /**
  * Default Xbox 360 layout — all positions in screen-relative fractions.
- * Layout:
- *   LB(0.05, 0.08)              RB(0.95, 0.08)
- *   LStick(0.18, 0.22)          FaceButtons(0.82, 0.25)
- *        CenterButtons(0.5, 0.55)
- *   DPad(0.18, 0.78)            RStick(0.82, 0.78)
+ * Follows the ergonomic shoulder-tab design: bumpers + triggers along the
+ * top edge (index fingers), sticks in the thumb zones, L3/R3 press buttons
+ * tucked beside each stick, and small system buttons on the top-center edge.
+ *
+ *   LT  LB  [Select] [Guide] [Start]           RB  RT      ← index fingers
+ *   L3 (LStick)                                  (ABXY) R3
+ *              DPad                      (RStick)
  */
 fun defaultXboxLayout(): ControllerLayout = ControllerLayout(
     name = "Xbox",
     buttons = listOf(
-        // Left stick — upper-left
-        ButtonLayout("lstick", ButtonLayout.ElementType.STICK_LEFT, 0.18f, 0.25f, 130, "L", 0x00000000, true),
-        // Right stick — lower-right
-        ButtonLayout("rstick", ButtonLayout.ElementType.STICK_RIGHT, 0.82f, 0.75f, 130, "R", 0x00000000, true),
+        // Left stick — left-middle thumb zone
+        ButtonLayout("lstick", ButtonLayout.ElementType.STICK_LEFT, 0.18f, 0.45f, 140, "L", 0x00000000, true),
+        // Right stick — lower-right thumb zone
+        ButtonLayout("rstick", ButtonLayout.ElementType.STICK_RIGHT, 0.82f, 0.72f, 140, "R", 0x00000000, true),
 
-        // Face buttons — upper-right quadrant (Xbox diamond)
-        ButtonLayout("face_a", ButtonLayout.ElementType.FACE_A, 0.82f, 0.32f, 52, "A", 0xFF4CAF50, true, Protocol.ButtonFlag.A),
-        ButtonLayout("face_b", ButtonLayout.ElementType.FACE_B, 0.88f, 0.22f, 52, "B", 0xFFE53935, true, Protocol.ButtonFlag.B),
-        ButtonLayout("face_x", ButtonLayout.ElementType.FACE_X, 0.76f, 0.22f, 52, "X", 0xFF2196F3, true, Protocol.ButtonFlag.X),
-        ButtonLayout("face_y", ButtonLayout.ElementType.FACE_Y, 0.82f, 0.12f, 52, "Y", 0xFFFFEB3B, true, Protocol.ButtonFlag.Y),
+        // Face buttons — right thumb diamond (upper-right)
+        ButtonLayout("face_a", ButtonLayout.ElementType.FACE_A, 0.80f, 0.36f, 52, "A", 0xFF4CAF50, true, Protocol.ButtonFlag.A),
+        ButtonLayout("face_b", ButtonLayout.ElementType.FACE_B, 0.88f, 0.28f, 52, "B", 0xFFE53935, true, Protocol.ButtonFlag.B),
+        ButtonLayout("face_x", ButtonLayout.ElementType.FACE_X, 0.72f, 0.28f, 52, "X", 0xFF2196F3, true, Protocol.ButtonFlag.X),
+        ButtonLayout("face_y", ButtonLayout.ElementType.FACE_Y, 0.80f, 0.20f, 52, "Y", 0xFFFFEB3B, true, Protocol.ButtonFlag.Y),
 
         // D-Pad — lower-left quadrant
         ButtonLayout("dpad_up", ButtonLayout.ElementType.DPAD_UP, 0.18f, 0.68f, 44, "↑", 0x00000000, true, Protocol.ButtonFlag.DPAD_UP),
@@ -114,18 +131,22 @@ fun defaultXboxLayout(): ControllerLayout = ControllerLayout(
         ButtonLayout("dpad_left", ButtonLayout.ElementType.DPAD_LEFT, 0.10f, 0.78f, 44, "←", 0x00000000, true, Protocol.ButtonFlag.DPAD_LEFT),
         ButtonLayout("dpad_right", ButtonLayout.ElementType.DPAD_RIGHT, 0.26f, 0.78f, 44, "→", 0x00000000, true, Protocol.ButtonFlag.DPAD_RIGHT),
 
-        // Bumpers — top edge
-        ButtonLayout("bumper_l", ButtonLayout.ElementType.BUMPER_L, 0.10f, 0.06f, 64, "LB", 0xFF607D8B, true, Protocol.ButtonFlag.LEFT_BUMPER),
-        ButtonLayout("bumper_r", ButtonLayout.ElementType.BUMPER_R, 0.90f, 0.06f, 64, "RB", 0xFF607D8B, true, Protocol.ButtonFlag.RIGHT_BUMPER),
+        // Bumpers — top corners (index fingers)
+        ButtonLayout("bumper_l", ButtonLayout.ElementType.BUMPER_L, 0.06f, 0.08f, 56, "LB", 0xFF607D8B, true, Protocol.ButtonFlag.LEFT_BUMPER),
+        ButtonLayout("bumper_r", ButtonLayout.ElementType.BUMPER_R, 0.94f, 0.08f, 56, "RB", 0xFF607D8B, true, Protocol.ButtonFlag.RIGHT_BUMPER),
 
-        // Triggers — bottom-right area
-        ButtonLayout("trigger_l", ButtonLayout.ElementType.TRIGGER_L, 0.70f, 0.92f, 36, "LT", 0xFF607D8B, true),
-        ButtonLayout("trigger_r", ButtonLayout.ElementType.TRIGGER_R, 0.90f, 0.92f, 36, "RT", 0xFF607D8B, true),
+        // Triggers — shoulder tabs along the top edge, inside the bumpers
+        ButtonLayout("trigger_l", ButtonLayout.ElementType.TRIGGER_L, 0.17f, 0.09f, 40, "LT", 0xFF607D8B, true),
+        ButtonLayout("trigger_r", ButtonLayout.ElementType.TRIGGER_R, 0.83f, 0.09f, 40, "RT", 0xFF607D8B, true),
 
-        // Center buttons — horizontal row at vertical center
-        ButtonLayout("center_back", ButtonLayout.ElementType.CENTER_BACK, 0.40f, 0.55f, 32, "BACK", 0xFF757575, true, Protocol.ButtonFlag.BACK),
-        ButtonLayout("center_guide", ButtonLayout.ElementType.CENTER_GUIDE, 0.50f, 0.55f, 36, "GUIDE", 0xFF9E9E9E, true, Protocol.ButtonFlag.GUIDE),
-        ButtonLayout("center_start", ButtonLayout.ElementType.CENTER_START, 0.60f, 0.55f, 32, "START", 0xFF757575, true, Protocol.ButtonFlag.START),
+        // Stick-press buttons (L3 / R3) — tucked beside each stick
+        ButtonLayout("stick_click_l", ButtonLayout.ElementType.STICK_CLICK_L, 0.06f, 0.45f, 36, "L3", 0xFF455A64, true, Protocol.ButtonFlag.LEFT_STICK),
+        ButtonLayout("stick_click_r", ButtonLayout.ElementType.STICK_CLICK_R, 0.94f, 0.72f, 36, "R3", 0xFF455A64, true, Protocol.ButtonFlag.RIGHT_STICK),
+
+        // Center buttons — small icons on the top-center edge, out of play
+        ButtonLayout("center_back", ButtonLayout.ElementType.CENTER_BACK, 0.40f, 0.10f, 30, "BACK", 0xFF757575, true, Protocol.ButtonFlag.BACK),
+        ButtonLayout("center_guide", ButtonLayout.ElementType.CENTER_GUIDE, 0.50f, 0.10f, 34, "GUIDE", 0xFF9E9E9E, true, Protocol.ButtonFlag.GUIDE),
+        ButtonLayout("center_start", ButtonLayout.ElementType.CENTER_START, 0.60f, 0.10f, 30, "START", 0xFF757575, true, Protocol.ButtonFlag.START),
     )
 )
 
@@ -160,10 +181,25 @@ object LayoutManager {
 
     fun loadCurrent(context: Context): ControllerLayout {
         val name = prefs(context).getString(KEY_CURRENT, null)
-        if (name != null) {
-            loadLayout(context, name)?.let { return it }
+        val layout = if (name != null) loadLayout(context, name) else null
+        return ensureStickClicks(layout ?: defaultXboxLayout())
+    }
+
+    /**
+     * Migration for layouts saved before v1.1.1: injects the L3/R3 stick-press
+     * buttons if the saved layout predates them, preserving user positions.
+     */
+    private fun ensureStickClicks(layout: ControllerLayout): ControllerLayout {
+        val hasL3 = layout.buttons.any { it.type == ButtonLayout.ElementType.STICK_CLICK_L }
+        val hasR3 = layout.buttons.any { it.type == ButtonLayout.ElementType.STICK_CLICK_R }
+        if (hasL3 && hasR3) return layout
+
+        val defaults = defaultXboxLayout().buttons
+        val missing = buildList {
+            if (!hasL3) add(defaults.first { it.type == ButtonLayout.ElementType.STICK_CLICK_L })
+            if (!hasR3) add(defaults.first { it.type == ButtonLayout.ElementType.STICK_CLICK_R })
         }
-        return defaultXboxLayout()
+        return layout.copy(buttons = layout.buttons + missing)
     }
 
     fun listLayouts(context: Context): List<String> {

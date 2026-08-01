@@ -114,9 +114,9 @@ class MainActivity : ComponentActivity() {
         udpClient.start(address, port, applicationContext)
         sensorManager?.start()
 
-        // Heartbeat loop
+        // Heartbeat loop — faster than the 2000ms server timeout for a safety margin
         lifecycleScope.launch {
-            while (isActive) { udpClient.sendHeartbeat(); delay(2000) }
+            while (isActive) { udpClient.sendHeartbeat(); delay(1200) }
         }
     }
 

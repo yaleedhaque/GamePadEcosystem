@@ -34,7 +34,6 @@ public sealed class InputListener : IDisposable
     {
         _udp = new UdpClient(new IPEndPoint(IPAddress.Any, Protocol.UdpPort));
         _udp.Client.ReceiveBufferSize = 2 * 1024 * 1024; // 2MB buffer
-        _udp.Client.ReceiveTimeout = 5000;
         _cts = new CancellationTokenSource();
 
         Console.ForegroundColor = ConsoleColor.DarkCyan;
@@ -51,7 +50,13 @@ public sealed class InputListener : IDisposable
                     _ = ProcessPacketAsync(result.Buffer, result.RemoteEndPoint);
                 }
                 catch (OperationCanceledException) { break; }
-                catch (SocketException) { break; }
+                catch (SocketException ex)
+                {
+                    // A transient socket error must NEVER kill the input listener —
+                    // otherwise the server silently stops responding to controllers
+                    // while discovery keeps running (observed failure). Log and continue.
+                    Console.WriteLine($"[Input] Socket error {ex.SocketErrorCode} ({ex.Message}) — continuing");
+                }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[Input] Error: {ex.Message}");

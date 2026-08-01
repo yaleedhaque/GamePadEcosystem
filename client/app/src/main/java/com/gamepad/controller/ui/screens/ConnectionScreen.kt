@@ -146,9 +146,9 @@ fun ConnectionScreen(
                     Text("Quick Start", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
                     Spacer(Modifier.height(6.dp))
                     listOf(
-                        "1" to "On PC: Settings > Network > Mobile Hotspot > ON",
-                        "2" to "On this phone: connect to PC's WiFi hotspot",
-                        "3" to "Run GamePadServer.exe on your PC",
+                        "1" to "Run GamePadServer.exe on your PC (elevated)",
+                        "2" to "Server auto-creates the GamePad_Server hotspot",
+                        "3" to "On this phone: connect to GamePad_Server WiFi (gamepad123)",
                         "4" to "Tap Scan — auto-discovery handles the rest",
                         "5" to "Connect more phones for multiplayer"
                     ).forEach { (n, t) ->
