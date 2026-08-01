@@ -1,0 +1,3001 @@
+================================================================================
+            GAMEPADSERVER.EXE — COMPLETE TECHNICAL REPORT
+            Offline Multiplayer Virtual Gamepad Server (Windows)
+            Version 1.1.0  |  C# / .NET 8  |  Built: 2026-08-01
+================================================================================
+
+TABLE OF CONTENTS
+  1.  Executive Summary
+  2.  What The Server Does
+  3.  Release Binary Details (sizes, hashes, build info)
+  4.  Environment & Build Toolchain
+  5.  Project / Repository Structure
+  6.  Architecture Overview (subsystems & data flow)
+  7.  The Wire Protocol (UDP packet formats)
+  8.  Complete Source Code — Every File, Verbatim
+       8.1  GamePadServer.csproj
+       8.2  app.manifest
+       8.3  Program.cs
+       8.4  Core/Protocol.cs
+       8.5  Core/ClientManager.cs
+       8.6  Network/DiscoveryService.cs
+       8.7  Network/InputListener.cs
+       8.8  Network/HotspotManager.cs
+       8.9  Network/LoopbackAdapter.cs
+       8.10 VirtualController/ControllerManager.cs
+       8.11 UI/ServerHud.cs
+       8.12 StartServer.bat
+  9.  How The Server Functions — Step By Step
+  10. How The WiFi Hotspot Is Started (4 strategies + keep-alive)
+  11. How Phones Connect, Discover, And Stream Input
+  12. The ViGEmBus Virtual Controller Mapping
+  13. Complete Bug / Failure Analysis (why old versions failed)
+  14. The Fixes Applied In v1.1.0 (what changed and why)
+  15. Verification & Testing Results (evidence)
+  16. Logging System (server.log, 1MB rotation)
+  17. Security & Privilege Model (UAC / admin requirements)
+  18. The Android Client Side (what talks to this server)
+  19. GitHub CI/CD Pipeline (release.yml)
+  20. How To Build From Source
+  21. How To Deploy & Run
+  22. Known Limitations & Future Work
+  23. File Manifest (release folder)
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+GamePadServer.exe is a Windows server (C#, .NET 8) that turns up to 8 Android
+phones into wireless Xbox 360 controllers for a Windows PC, using nothing but
+a WiFi hotspot, raw UDP sockets, and the ViGEmBus virtual gamepad driver.
+
+  - Phones run a pre-built Android app (GamePadController-v1.1.1.apk).
+  - The server creates its OWN WiFi hotspot (auto-started, no router needed).
+  - It works even when the PC has NO internet at all (virtual loopback adapter).
+  - No cloud, no accounts, no cables, sub-5ms latency.
+
+This report documents v1.1.1 — the current fixed, tested, and published release
+(server sources identical to v1.1.0). Prior versions were broken: the hotspot
+never started (a malformed PowerShell comment crashed the tethering script) and
+the discovery service flooded logs with phantom devices in an infinite loop
+(40 MB of garbage in one run). Both root causes were found, fixed, and verified
+in v1.1.0; v1.1.1 then shipped the matching Android client (new layout editor)
+and the first fully successful CI build of both assets. Companion report for
+the Android app: GamePadControllerDetails.txt in this folder.
+
+================================================================================
+2. WHAT THE SERVER DOES
+================================================================================
+
+  - Opens UDP port 9876 and listens for 34-byte binary input packets from phones.
+  - Broadcasts its presence on UDP port 9878 every 2 seconds so phones can
+    auto-discover it (no IP typing required).
+  - Listens for discovery broadcasts and answers with its identity.
+  - Assigns each phone a player slot (1..8).
+  - Creates real virtual Xbox 360 controllers via the ViGEmBus kernel driver.
+  - Maps every incoming phone button/axis/trigger onto a virtual Xbox 360 pad.
+  - Auto-creates / auto-destroys controllers as phones join or drop.
+  - Zeroes all inputs on timeout (2 s) so sticks never "drift" after a phone
+    disconnects mid-game.
+  - Starts a Windows Mobile Hotspot ("GamePad_Server" / password "gamepad123")
+    with multiple fallback strategies, a watchdog, and keep-alive.
+  - Runs a live console HUD showing players, packet counts, and bytes.
+  - Mirrors all console output to server.log (capped at 1 MB, auto-rotating).
+
+================================================================================
+3. RELEASE BINARY DETAILS
+================================================================================
+
+File                          Size (bytes)   Purpose
+----------------------------  -------------  ------------------------------------
+GamePadServer.exe             152,064        Main executable (app host + entry)
+GamePadServer.dll              73,216        Compiled C# assembly (real code)
+GamePadServer.deps.json         1,097        .NET dependency manifest
+GamePadServer.runtimeconfig.json 458         Runtime settings (framework version)
+Nefarius.ViGEm.Client.dll     290,304        ViGEmClient library (Nefarius)
+StartServer.bat                   300        Elevates + launches the server
+GamePadController-v1.1.1.apk  1,069,628      Android phone client (release, sideload)
+server.log                      9,002        Runtime log (created at runtime)
+
+  Framework-dependent publish (NOT self-contained). Requires .NET 8 runtime
+  or SDK installed. Total footprint ~517 KB vs the old 65 MB self-contained
+  single-file build.
+
+  SHA-256 hashes of the shipped release files (2026-08-01, republished from
+  repo HEAD 146ab46):
+    GamePadServer.exe        69DDB7FD2C55637B2F2295D5CF1889DFA772A8F5ADD4648984A3951E097C5B35
+    GamePadServer.dll        580369E5B33150ED00AA225900284C495318BECF98D3CF33DC1338477BA1591D
+    GamePadController-v1.1.1.apk  C700D273460118E68DB9FDB5FD11D3811754DA839C135C9C215B900B75E9ECB5
+
+  Assembly metadata: the deployed GamePadServer.exe/.dll are stamped
+  FileVersion 1.1.0.0, ProductVersion 1.1.0+146ab46 (built from the repo at
+  commit 146ab46 on 2026-08-01; identical server code to tag v1.1.1).
+
+  NOTE: this folder previously held a stale 16.5 MB DEBUG GamePadController.apk
+  (v1.0.0, versionCode 1). It was removed on 2026-08-01; the only APK now is the
+  1 MB v1.1.1 release above. Full client details: see GamePadControllerDetails.txt
+  in this folder.
+
+  Public releases:
+    v1.1.1 (current): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
+      Assets: GamePadServer-v1.1.1-win-x64.zip (259,689 bytes) and
+              GamePadController-v1.1.1.apk (1,069,624 bytes, CI build)
+    v1.1.0 (superseded): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.0
+
+================================================================================
+4. ENVIRONMENT & BUILD TOOLCHAIN
+================================================================================
+
+  OS                     : Windows 11 (win32)
+  CPU/Platform           : x64
+  .NET SDK               : 8.0.423  (C:\Program Files\dotnet\sdk)
+  Target framework       : net8.0-windows
+  Language               : C# 12 (modern, nullable enabled, implicit usings)
+  UI framework used      : none for UI; <UseWindowsForms>true</UseWindowsForms>
+                           is set only so the console host behaves like a GUI
+                           app on the desktop.
+  NuGet packages         : Nefarius.ViGEm.Client 1.21.256 (virtual gamepad)
+  Android build          : AGP 8.7.0, Kotlin 2.1.0, Compose BOM 2024.12.01,
+                           Gradle 8.11.1, JDK 17, compileSdk/targetSdk 35,
+                           minSdk 26 (Android 8.0+)
+  Kernel driver          : ViGEmBus (Microsoft-verified) — status RUNNING
+  Git / GitHub           : repo yaleedhaque/GamePadEcosystem, branch main
+  Build command (server) : dotnet publish -c Release -o ./release
+  Build command (APK)    : ./gradlew :app:assembleRelease  (CI, ubuntu)
+
+================================================================================
+5. PROJECT / REPOSITORY STRUCTURE
+================================================================================
+
+  GamePadEcosystem/
+  ├── .github/workflows/release.yml   CI: builds server + APK on v* tags
+  ├── GamePadEcosystem.sln            Visual Studio solution
+  ├── README.md                       Project documentation
+  ├── CONTRIBUTING.md                 Contributor guidelines
+  ├── LICENSE                         MIT (c) 2026 Yaleed Haque
+  ├── .gitignore                      Excludes bin/obj/build/apk/local.properties
+  ├── server/src/GamePadServer/       THE SERVER (this project)
+  │   ├── GamePadServer.csproj
+  │   ├── app.manifest
+  │   ├── Program.cs                  Entry point, logging, watchdog, main loop
+  │   ├── Core/Protocol.cs            Wire format constants + packet structs
+  │   ├── Core/ClientManager.cs       Player-slot + connection state management
+  │   ├── Network/DiscoveryService.cs UDP discovery (reactive + active)
+  │   ├── Network/InputListener.cs    High-perf UDP input receiver
+  │   ├── Network/HotspotManager.cs   Hotspot startup (4 strategies + keep-alive)
+  │   ├── Network/LoopbackAdapter.cs  Offline hotspot virtual NIC (SetupAPI)
+  │   ├── VirtualController/ControllerManager.cs  ViGEmBus Xbox 360 mapping
+  │   └── UI/ServerHud.cs             Live console dashboard
+  ├── client/                         Android app (Kotlin + Compose)
+  │   ├── app/build.gradle.kts
+  │   ├── app/src/main/java/com/gamepad/controller/
+  │   │   ├── network/Protocol.kt, UdpInputClient.kt, DiscoveryClient.kt, NetworkBinder.kt
+  │   │   ├── sensors/SensorInputManager.kt
+  │   │   ├── profiles/ControllerProfile.kt
+  │   │   └── ui/ (screens + components), layout/ButtonLayout.kt, MainActivity.kt
+  │   └── gradle/wrapper/ (Gradle 8.11.1)
+  └── shared/protocol/PROTOCOL.md    Wire format specification
+
+================================================================================
+6. ARCHITECTURE OVERVIEW (SUBSYSTEMS & DATA FLOW)
+================================================================================
+
+                       ┌──────────────────────────────┐
+                       │       GamePadServer.exe       │
+                       │                              │
+   Android phone       │  ┌────────────────────────┐  │
+   ────────────        │  │ InputListener (UDP 9876)│ │
+   GamePad app ──────► │  └──────────┬─────────────┘  │
+   (Kotlin/Compose)    │             │ 34-byte packets │
+     │  discovery      │             ▼                │
+     │  UDP 9878       │  ┌────────────────────────┐  │
+     ├───────────────► │  │ DiscoveryService (9878) │ │
+     │                 │  └──────────┬─────────────┘  │
+     │                 │             │ assigns slot   │
+     │                 │             ▼                │
+     │                 │  ┌────────────────────────┐  │
+     │                 │  │ ClientManager          │  │
+     │                 │  │ (slots 0..7, timeouts) │  │
+     │                 │  └──────────┬─────────────┘  │
+     │                 │             │                │
+     │                 │             ▼                │
+     │                 │  ┌────────────────────────┐  │
+     │                 │  │ ControllerManager      │  │
+     │                 │  │ (ViGEmBus Xbox 360 xN) │─┼──► Windows sees real pads
+     │                 │  └────────────────────────┘  │        (emulators/games)
+     │                 │                              │
+     │                 │  ┌────────────────────────┐  │
+     │                 │  │ HotspotManager +       │  │
+     │                 │  │ LoopbackAdapter        │─┼──► WiFi "GamePad_Server"
+     │                 │  └────────────────────────┘  │        (hotspot for phones)
+     │                 │                              │
+     │                 │  ┌────────────────────────┐  │
+     │                 │  │ ServerHud + FileLog    │  │
+     │                 │  └────────────────────────┘  │
+     │                 └──────────────────────────────┘
+
+Data flow summary:
+  1. HotspotManager brings up the WiFi hotspot (auto or loopback-backed).
+  2. Phones join the hotspot WiFi and open the app.
+  3. The app broadcasts a discovery request on UDP 9878; the server replies
+     with its identity ("GPAD_SERVER_V1|<hostname>").
+  4. The phone then sends 34-byte UDP input packets to 192.168.137.1:9876.
+  5. InputListener validates the GPAD magic, assigns a slot via ClientManager,
+     and pushes the state into ControllerManager.
+  6. ControllerManager drives a virtual Xbox 360 pad over ViGEmBus.
+  7. Games/emulators on the PC see the pad as if a real Xbox 360 controller
+     were plugged in.
+
+================================================================================
+7. THE WIRE PROTOCOL (UDP PACKET FORMATS)
+================================================================================
+
+Constants (must match Android client byte-for-byte):
+  UDP input port       : 9876
+  TCP port             : 9877  (reserved)
+  Discovery port       : 9878
+  Max players          : 8
+  Disconnect timeout   : 2000 ms
+  Packet magic         : 0x47504144 = ASCII "GPAD"
+  Discovery magic      : "GPAD_DISCOVER_V1"
+
+Packet types (byte at offset 4):
+  0x01 Input
+  0x02 Heartbeat
+  0x03 GyroData
+  0x04 Config
+
+InputPacket — exactly 34 bytes, little-endian:
+  Offset  Size  Type     Field
+  ------  ----  -------  ----------------------------------------------
+  0       4     int32    Magic  (0x47504144 "GPAD")
+  4       1     byte     PacketType
+  5       1     byte     DeviceId (player slot, server-assigned)
+  6       2     uint16   Sequence (monotonic counter)
+  8       4     uint32   Buttons (bitmask, see below)
+  12      2     int16    LeftX   (left stick X, -32768..32767)
+  14      2     int16    LeftY
+  16      2     int16    RightX
+  18      2     int16    RightY
+  20      1     byte     LeftTrigger  (0..255)
+  21      1     byte     RightTrigger (0..255)
+  22      4     float32  GyroX (rad/s)
+  26      4     float32  GyroY
+  30      4     float32  GyroZ
+
+Button flag bitmask (uint32):
+  bit  0 A            bit 1 B            bit 2 X           bit 3 Y
+  bit  4 LeftBumper   bit 5 RightBumper  bit 6 Back        bit 7 Start
+  bit  8 LeftStick    bit 9 RightStick   bit 10 DPadUp     bit 11 DPadDown
+  bit 12 DPadLeft     bit 13 DPadRight   bit 14 Guide
+
+Server-to-client AssignmentPacket (sent after a phone's first input):
+  byte 0      = 0xAA (assignment magic)
+  byte 1      = PlayerSlot (0..7)
+  bytes 2..   = UTF-8 server hostname
+
+Discovery responses: the server answers every UDP packet on port 9878 with
+"GPAD_SERVER_V1|<hostname>" so any client version can discover it.
+
+================================================================================
+8. COMPLETE SOURCE CODE — EVERY FILE, VERBATIM
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1  server/src/GamePadServer/GamePadServer.csproj
+--------------------------------------------------------------------------------
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>GamePadEcosystem.Server</RootNamespace>
+    <AssemblyName>GamePadServer</AssemblyName>
+    <Version>1.1.0</Version>
+    <Authors>GamePadEcosystem</Authors>
+    <Description>Offline multiplayer virtual gamepad server — ViGEmBus + UDP pipeline</Description>
+    <Copyright>Copyright (c) 2026</Copyright>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Nefarius.ViGEm.Client" Version="1.21.256" />
+  </ItemGroup>
+
+</Project>
+
+--------------------------------------------------------------------------------
+8.2  server/src/GamePadServer/app.manifest
+--------------------------------------------------------------------------------
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="GamePadServer"/>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}" />
+    </application>
+  </compatibility>
+</assembly>
+
+Note: requireAdministrator means Windows forces a UAC elevation prompt when
+the exe launches. Required because hotspot setup (registry, SetupAPI, ICS)
+needs admin rights, and the ViGEmBus driver interface also runs privileged.
+This is why a plain double-click works but launching from a non-elevated
+shell does not — StartServer.bat handles elevation.
+
+--------------------------------------------------------------------------------
+8.3  server/src/GamePadServer/Program.cs
+--------------------------------------------------------------------------------
+using GamePadEcosystem.Server.Core;
+using GamePadEcosystem.Server.Network;
+using GamePadEcosystem.Server.VirtualController;
+using GamePadEcosystem.Server.UI;
+
+namespace GamePadEcosystem.Server;
+
+/// <summary>
+/// Entry point — wires all subsystems and runs the server loop.
+/// </summary>
+internal static class Program
+{
+    [STAThread]
+    static void Main(string[] args)
+    {
+        AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+        {
+            FileLog($"FATAL: {e.ExceptionObject}");
+        };
+
+        try
+        {
+            Run(args);
+        }
+        catch (Exception ex)
+        {
+            FileLog($"FATAL (top-level): {ex}");
+            throw;
+        }
+    }
+
+    private static void Run(string[] args)
+    {
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
+
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine(Logo);
+        Console.ResetColor();
+
+        Log("Boot", "Starting GamePad Server v1.0...");
+        Log("Boot", "Initializing ViGEmBus driver interface...");
+
+        using var clientManager = new ClientManager();
+        using var controllerManager = new ControllerManager();
+        using var discoveryService = new DiscoveryService();
+        using var inputListener = new InputListener(clientManager, controllerManager);
+        using var hud = new ServerHud(clientManager, controllerManager);
+
+        // Start WiFi hotspot — creates local network, no internet needed
+        using var hotspot = new HotspotManager();
+        var hotspotReady = hotspot.Start();
+
+        // Wire events
+        discoveryService.OnClientDiscovered += (name, ep) =>
+            Log("Discovery", $"New device on network: {name} @ {ep}");
+
+        inputListener.OnInputReceived += (slot, packet) =>
+            hud.IncrementStats(InputPacket.Size);
+
+        // Start services
+        discoveryService.Start();
+        inputListener.Start();
+        hud.Start();
+
+        var serverIp = hotspot.HotspotIp?.ToString() ?? GetLocalIp() ?? "unknown";
+
+        Log("Boot", "═══════════════════════════════════════════════");
+        Log("Boot", "Server is READY");
+        Log("Boot", "");
+
+        if (hotspotReady)
+        {
+            Log("Boot", "HOTSPOT is running — connect phones to GamePad_Server WiFi:");
+            Log("Boot", $"  SSID:     GamePad_Server");
+            Log("Boot", $"  Password:  gamepad123");
+            Log("Boot", $"  Server:   {serverIp}:{Protocol.UdpPort}");
+            Log("Boot", "");
+        }
+        else
+        {
+            Log("Boot", "HOTSPOT not available — manually enable Mobile Hotspot in");
+            Log("Boot", "Settings > Network & Internet > Mobile Hotspot, then connect.");
+            Log("Boot", $"  Server:   {serverIp}:{Protocol.UdpPort}");
+            Log("Boot", "");
+        }
+
+        Log("Boot", "SETUP:");
+        Log("Boot", "  1. Phone connects to PC's WiFi hotspot (or same router)");
+        Log("Boot", "  2. Open GamePad Controller app on each phone");
+        Log("Boot", "  3. App will auto-discover this server");
+        Log("Boot", "");
+        Log("Boot", "PC hotspot blocks phone hotspot client isolation —");
+        Log("Boot", "all devices can see each other. No router needed.");
+        Log("Boot", "═══════════════════════════════════════════════");
+        Log("Boot", "Press [Q] to quit.\n");
+
+        // Watchdog
+        using var watchdogCts = new CancellationTokenSource();
+        var watchdog = Task.Run(async () =>
+        {
+            while (!watchdogCts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    clientManager.RemoveStaleClients(TimeSpan.FromMilliseconds(Protocol.DisconnectionTimeoutMs));
+                    controllerManager.CheckDisconnections(TimeSpan.FromMilliseconds(Protocol.DisconnectionTimeoutMs));
+                    await Task.Delay(1000, watchdogCts.Token);
+                }
+                catch (OperationCanceledException) { break; }
+            }
+        });
+
+        // Main loop
+        while (true)
+        {
+            try
+            {
+                if (Console.KeyAvailable)
+                {
+                    var key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Q) break;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // No console attached (e.g. launched from a startup shortcut) —
+                // Console.KeyAvailable throws here. Keep the server alive.
+            }
+            Thread.Sleep(50);
+        }
+
+        // Cleanup
+        Log("Shutdown", "Cleaning up...");
+        watchdogCts.Cancel();
+        hud.Dispose();
+        inputListener.Dispose();
+        discoveryService.Dispose();
+        hotspot.Dispose();
+        controllerManager.Dispose();
+        clientManager.Reset();
+        Log("Shutdown", "Server stopped cleanly.");
+    }
+
+    private static string? GetLocalIp()
+    {
+        try
+        {
+            using var socket = new System.Net.Sockets.Socket(
+                System.Net.Sockets.AddressFamily.InterNetwork,
+                System.Net.Sockets.SocketType.Dgram,
+                System.Net.Sockets.ProtocolType.Udp);
+            socket.Connect("8.8.8.8", 80);
+            return (socket.LocalEndPoint as System.Net.IPEndPoint)?.Address.ToString();
+        }
+        catch { return null; }
+    }
+
+    private static void Log(string tag, string message)
+    {
+        FileLog($"[{tag}] {message}");
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write($"[{tag}] ");
+        Console.ResetColor();
+        Console.WriteLine(message);
+    }
+
+    /// <summary>
+    /// Mirrors console output to a log file so the server can be diagnosed
+    /// even when launched without a visible console (startup shortcut, etc.).
+    /// The file is capped and rotated so it can never grow unbounded.
+    /// </summary>
+    private static readonly object _logLock = new();
+
+    private static void FileLog(string line)
+    {
+        try
+        {
+            lock (_logLock)
+            {
+                var logPath = Path.Combine(AppContext.BaseDirectory, "server.log");
+                var fi = new FileInfo(logPath);
+                if (fi.Exists && fi.Length > 1_048_576) // 1 MB cap
+                {
+                    try { File.Copy(logPath, logPath + ".old", overwrite: true); } catch { }
+                    try { File.Delete(logPath); } catch { }
+                }
+                File.AppendAllText(logPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {line}{Environment.NewLine}");
+            }
+        }
+        catch { }
+    }
+
+    private const string Logo = @"
+ ╔═══════════════════════════════════════════════════════════════════╗
+ ║                                                                   ║
+ ║       ██████╗  █████╗ ██████╗ ████████╗███████╗ ██████╗ ██╗     ██║
+ ║      ██╔════╝ ██╔══██╗██╔══██╗╚══██╔══╝██╔════╝██╔═══██╗██║     ██║
+ ║      ██║  ███╗███████║██████╔╝   ██║   █████╗  ██║   ██║██║     ██║
+ ║      ██║   ██║██╔══██║██╔══██╗   ██║   ██╔══╝  ██║   ██║██║     ██║
+ ║      ╚██████╔╝██║  ██║██████╔╝   ██║   ██║     ╚██████╔╝███████╗██║
+ ║       ╚═════╝ ╚═╝  ╚═╝╚═════╝    ╚═╝   ╚═╝      ╚═════╝ ╚══════╝║
+ ║                                                                   ║
+ ║          Offline Multiplayer Virtual Gamepad Server v1.0          ║
+ ║              ViGEmBus + UDP · WiFi Hotspot · Zero Cloud           ║
+ ║                                                                   ║
+ ╚═══════════════════════════════════════════════════════════════════╝";
+}
+
+--------------------------------------------------------------------------------
+8.4  server/src/GamePadServer/Core/Protocol.cs
+--------------------------------------------------------------------------------
+using System.Buffers.Binary;
+
+namespace GamePadEcosystem.Server.Core;
+
+/// <summary>
+/// Shared protocol constants and packet definitions.
+/// Binary wire format for ultra-low-latency UDP controller input.
+/// Must match the Android client exactly.
+/// </summary>
+public static class Protocol
+{
+    public const int UdpPort = 9876;
+    public const int TcpPort = 9877;
+    public const int DiscoveryPort = 9878;
+    public const int MaxPlayers = 8;
+    public const int DisconnectionTimeoutMs = 2000;
+    public const int PacketMagic = 0x47504144; // "GPAD" in ASCII
+
+    public static readonly byte[] DiscoveryMagic = "GPAD_DISCOVER_V1"u8.ToArray();
+
+    public enum PacketType : byte
+    {
+        Input     = 0x01,
+        Heartbeat = 0x02,
+        GyroData  = 0x03,
+        Config    = 0x04,
+    }
+
+    [Flags]
+    public enum ButtonFlag : uint
+    {
+        None         = 0,
+        A            = 1 << 0,
+        B            = 1 << 1,
+        X            = 1 << 2,
+        Y            = 1 << 3,
+        LeftBumper   = 1 << 4,
+        RightBumper  = 1 << 5,
+        Back         = 1 << 6,
+        Start        = 1 << 7,
+        LeftStick    = 1 << 8,
+        RightStick   = 1 << 9,
+        DPadUp       = 1 << 10,
+        DPadDown     = 1 << 11,
+        DPadLeft     = 1 << 12,
+        DPadRight    = 1 << 13,
+        Guide        = 1 << 14,
+    }
+}
+
+/// <summary>
+/// Compact binary input packet — 34 bytes total.
+/// Designed for sub-5ms UDP transmission over local WiFi hotspot.
+///
+/// Layout:
+///   [0..3]   Magic (int32)       — validates packet authenticity
+///   [4]      PacketType (byte)   — input, heartbeat, gyro, config
+///   [5]      DeviceId (byte)     — assigned by server on connection
+///   [6..7]   Sequence (uint16)   — monotonic packet counter
+///   [8..11]  Buttons (uint32)    — bitmask of all digital inputs
+///   [12..13] LeftX (int16)       — left stick horizontal
+///   [14..15] LeftY (int16)       — left stick vertical
+///   [16..17] RightX (int16)      — right stick horizontal
+///   [18..19] RightY (int16)      — right stick vertical
+///   [20]     LeftTrigger (byte)  — left analog trigger 0-255
+///   [21]     RightTrigger (byte) — right analog trigger 0-255
+///   [22..25] GyroX (float32)     — gyroscope X (rad/s)
+///   [26..29] GyroY (float32)     — gyroscope Y (rad/s)
+///   [30..33] GyroZ (float32)     — gyroscope Z (rad/s)
+/// </summary>
+public struct InputPacket
+{
+    public int Magic;
+    public byte PacketType;
+    public byte DeviceId;
+    public ushort Sequence;
+    public uint Buttons;
+    public short LeftX;
+    public short LeftY;
+    public short RightX;
+    public short RightY;
+    public byte LeftTrigger;
+    public byte RightTrigger;
+    public float GyroX;
+    public float GyroY;
+    public float GyroZ;
+
+    public const int Size = 34;
+
+    public byte[] Serialize()
+    {
+        var buf = new byte[Size];
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0), Magic);
+        buf[4] = PacketType;
+        buf[5] = DeviceId;
+        BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(6), Sequence);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8), Buttons);
+        BinaryPrimitives.WriteInt16LittleEndian(buf.AsSpan(12), LeftX);
+        BinaryPrimitives.WriteInt16LittleEndian(buf.AsSpan(14), LeftY);
+        BinaryPrimitives.WriteInt16LittleEndian(buf.AsSpan(16), RightX);
+        BinaryPrimitives.WriteInt16LittleEndian(buf.AsSpan(18), RightY);
+        buf[20] = LeftTrigger;
+        buf[21] = RightTrigger;
+        BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(22), GyroX);
+        BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(26), GyroY);
+        BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(30), GyroZ);
+        return buf;
+    }
+
+    public static InputPacket Deserialize(byte[] data)
+    {
+        if (data.Length < Size)
+            throw new ArgumentException($"Packet too small: {data.Length} < {Size}");
+
+        return new InputPacket
+        {
+            Magic         = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(0)),
+            PacketType    = data[4],
+            DeviceId      = data[5],
+            Sequence      = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(6)),
+            Buttons       = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(8)),
+            LeftX         = BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(12)),
+            LeftY         = BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(14)),
+            RightX        = BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(16)),
+            RightY        = BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(18)),
+            LeftTrigger   = data[20],
+            RightTrigger  = data[21],
+            GyroX         = BinaryPrimitives.ReadSingleLittleEndian(data.AsSpan(22)),
+            GyroY         = BinaryPrimitives.ReadSingleLittleEndian(data.AsSpan(26)),
+            GyroZ         = BinaryPrimitives.ReadSingleLittleEndian(data.AsSpan(30)),
+        };
+    }
+
+    public bool IsValid() => Magic == Protocol.PacketMagic;
+}
+
+/// <summary>
+/// Server-to-client assignment packet sent after discovery.
+/// Communicates the assigned player slot and server identity.
+/// </summary>
+public struct AssignmentPacket
+{
+    public byte PlayerSlot;
+    public string ServerName;
+
+    public byte[] Serialize()
+    {
+        var nameBytes = System.Text.Encoding.UTF8.GetBytes(ServerName);
+        var buf = new byte[2 + nameBytes.Length];
+        buf[0] = 0xAA; // assignment magic
+        buf[1] = PlayerSlot;
+        Buffer.BlockCopy(nameBytes, 0, buf, 2, nameBytes.Length);
+        return buf;
+    }
+}
+
+--------------------------------------------------------------------------------
+8.5  server/src/GamePadServer/Core/ClientManager.cs
+--------------------------------------------------------------------------------
+using System.Collections.Concurrent;
+using System.Net;
+
+namespace GamePadEcosystem.Server.Core;
+
+/// <summary>
+/// Manages all connected controller clients.
+/// Handles player slot assignment, timeout tracking, and connection state.
+/// Thread-safe for concurrent UDP packet processing.
+/// </summary>
+public sealed class ClientManager : IDisposable
+{
+    private readonly ConcurrentDictionary<int, ConnectedClient> _clients = new();
+    private readonly ConcurrentDictionary<IPEndPoint, int> _endpointToSlot = new();
+    private byte _nextSlot;
+
+    public int ConnectedCount => _clients.Count(kvp => kvp.Value.IsConnected);
+    public IReadOnlyCollection<ConnectedClient> Clients => _clients.Values.ToList().AsReadOnly();
+
+    /// <summary>
+    /// Assigns or retrieves a player slot for a given endpoint.
+    /// Reuses slots from disconnected clients when max players reached.
+    /// </summary>
+    public byte AssignSlot(IPEndPoint endpoint, string deviceName)
+    {
+        if (_endpointToSlot.TryGetValue(endpoint, out var existingSlot))
+        {
+            if (_clients.TryGetValue(existingSlot, out var existing))
+            {
+                existing.LastSeen = DateTime.UtcNow;
+                existing.DeviceName = deviceName;
+                if (!existing.IsConnected)
+                {
+                    existing.IsConnected = true;
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"[+] Player {existingSlot + 1} reconnected: {deviceName} ({endpoint})");
+                    Console.ResetColor();
+                }
+            }
+            return (byte)existingSlot;
+        }
+
+        // Try to find a free slot from disconnected clients first
+        if (_nextSlot >= Protocol.MaxPlayers)
+        {
+            foreach (var kvp in _clients)
+            {
+                if (!kvp.Value.IsConnected)
+                {
+                    _endpointToSlot[endpoint] = kvp.Key;
+                    kvp.Value.Endpoint = endpoint;
+                    kvp.Value.DeviceName = deviceName;
+                    kvp.Value.IsConnected = true;
+                    kvp.Value.LastSeen = DateTime.UtcNow;
+
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"[+] Player {kvp.Key + 1} reconnected (reused slot): {deviceName} ({endpoint})");
+                    Console.ResetColor();
+                    return (byte)kvp.Key;
+                }
+            }
+            throw new InvalidOperationException($"Max players ({Protocol.MaxPlayers}) reached");
+        }
+
+        var slot = (byte)(_nextSlot++);
+        var client = new ConnectedClient
+        {
+            Slot = slot,
+            Endpoint = endpoint,
+            DeviceName = deviceName,
+            ConnectedAt = DateTime.UtcNow,
+            LastSeen = DateTime.UtcNow,
+            IsConnected = true,
+        };
+
+        _clients[slot] = client;
+        _endpointToSlot[endpoint] = slot;
+
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"[+] Player {slot + 1} connected: {deviceName} ({endpoint})");
+        Console.ResetColor();
+
+        return slot;
+    }
+
+    public bool TryGetSlot(IPEndPoint endpoint, out int slot)
+        => _endpointToSlot.TryGetValue(endpoint, out slot);
+
+    public ConnectedClient? GetClient(int slot)
+    {
+        _clients.TryGetValue(slot, out var client);
+        return client;
+    }
+
+    public void MarkDisconnected(int slot)
+    {
+        if (_clients.TryGetValue(slot, out var client) && client.IsConnected)
+        {
+            client.IsConnected = false;
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[-] Player {slot + 1} disconnected: {client.DeviceName}");
+            Console.ResetColor();
+        }
+    }
+
+    public void RemoveStaleClients(TimeSpan timeout)
+    {
+        foreach (var kvp in _clients)
+        {
+            if (kvp.Value.IsConnected && (DateTime.UtcNow - kvp.Value.LastSeen) > timeout)
+                MarkDisconnected(kvp.Key);
+        }
+    }
+
+    public void Reset()
+    {
+        _clients.Clear();
+        _endpointToSlot.Clear();
+        _nextSlot = 0;
+    }
+
+    public void Dispose() => Reset();
+}
+
+/// <summary>
+/// Represents a single connected controller device.
+/// </summary>
+public sealed class ConnectedClient
+{
+    public byte Slot { get; set; }
+    public IPEndPoint Endpoint { get; set; } = null!;
+    public string DeviceName { get; set; } = "Unknown";
+    public DateTime ConnectedAt { get; set; }
+    public DateTime LastSeen { get; set; }
+    public bool IsConnected { get; set; }
+    public ushort LastSequence { get; set; }
+}
+
+--------------------------------------------------------------------------------
+8.6  server/src/GamePadServer/Network/DiscoveryService.cs
+--------------------------------------------------------------------------------
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Text;
+using GamePadEcosystem.Server.Core;
+
+namespace GamePadEcosystem.Server.Network;
+
+/// <summary>
+/// Handles UDP broadcast auto-discovery from Android clients.
+/// Two modes:
+///   1. Reactive: responds to client discovery broadcasts
+///   2. Active: periodically broadcasts server presence so clients find us passively
+///
+/// FIX: The previous version received its OWN broadcast packets back on the same
+/// socket, treated them as brand-new phones ("Android Device @ <own-ip>:9878")
+/// and responded to itself in an infinite loop — flooding the log and console.
+/// We now ignore any packet that (a) comes from one of our own local IPs or
+/// (b) contains our own server identity, and we dedupe real devices per-IP.
+/// </summary>
+public sealed class DiscoveryService : IDisposable
+{
+    private UdpClient? _udp;
+    private CancellationTokenSource? _cts;
+    private Task? _listenTask;
+    private Task? _broadcastTask;
+
+    private readonly ConcurrentDictionary<string, DateTime> _seenDevices = new();
+    private readonly object _lock = new();
+    private volatile HashSet<IPAddress> _ownIps = new();
+
+    public event Action<string, IPEndPoint>? OnClientDiscovered;
+
+    private string ServerIdentity => $"GPAD_SERVER_V1|{Dns.GetHostName()}";
+
+    public void Start()
+    {
+        _udp = new UdpClient(new IPEndPoint(IPAddress.Any, Protocol.DiscoveryPort));
+        _udp.EnableBroadcast = true;
+        _cts = new CancellationTokenSource();
+        _ownIps = CollectLocalIps();
+
+        Console.ForegroundColor = ConsoleColor.DarkCyan;
+        Console.WriteLine($"[Discovery] Listening on UDP port {Protocol.DiscoveryPort}");
+        Console.WriteLine($"[Discovery] Broadcasting server presence every 2s");
+        Console.ResetColor();
+
+        // Listener — responds to ANY packet on this port (not just magic)
+        // This ensures compatibility with all client versions.
+        _listenTask = Task.Run(async () =>
+        {
+            while (!_cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    var result = await _udp.ReceiveAsync(_cts.Token);
+                    ProcessPacket(result.Buffer, result.RemoteEndPoint);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Discovery] Error: {ex.Message}");
+                }
+            }
+        });
+
+        // Broadcaster — sends to every active network interface's broadcast address.
+        _broadcastTask = Task.Run(async () =>
+        {
+            while (!_cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    _ownIps = CollectLocalIps();
+                    var broadcastData = Encoding.UTF8.GetBytes(ServerIdentity);
+
+                    try
+                    {
+                        var limitedBcast = new IPEndPoint(IPAddress.Broadcast, Protocol.DiscoveryPort);
+                        await _udp.SendAsync(broadcastData, broadcastData.Length, limitedBcast);
+                    }
+                    catch { }
+
+                    foreach (var iface in GetAllBroadcastAddresses())
+                    {
+                        try
+                        {
+                            var ep = new IPEndPoint(iface, Protocol.DiscoveryPort);
+                            await _udp.SendAsync(broadcastData, broadcastData.Length, ep);
+                        }
+                        catch { }
+                    }
+
+                    await Task.Delay(2000, _cts.Token);
+                }
+                catch (OperationCanceledException) { break; }
+                catch { }
+            }
+        });
+    }
+
+    private void ProcessPacket(byte[] data, IPEndPoint remoteEp)
+    {
+        // ── Guard 1: never react to our own broadcasts ──────────────────────
+        if (remoteEp.Address is null) return;
+        if (_ownIps.Contains(remoteEp.Address)) return;
+        if (IsBroadcastAddress(remoteEp.Address)) return;
+
+        // ── Guard 2: ignore our own server-identity broadcasts received back ─
+        if (data.Length >= ServerIdentity.Length &&
+            Encoding.UTF8.GetString(data.AsSpan(0, ServerIdentity.Length))
+                .StartsWith("GPAD_SERVER_V1", StringComparison.Ordinal))
+            return;
+
+        var deviceName = "Android Device";
+        if (data.Length >= Protocol.DiscoveryMagic.Length &&
+            data.AsSpan().SequenceEqual(Protocol.DiscoveryMagic))
+        {
+            if (data.Length > Protocol.DiscoveryMagic.Length)
+                deviceName = Encoding.UTF8.GetString(data.AsSpan(Protocol.DiscoveryMagic.Length));
+        }
+
+        // Respond with server identity so the phone can connect.
+        var response = Encoding.UTF8.GetBytes(ServerIdentity);
+        try { _udp?.SendAsync(response, response.Length, remoteEp).Wait(200); }
+        catch { }
+
+        // ── Guard 3: dedupe per-endpoint so we don't spam discovery events ──
+        var key = $"{remoteEp.Address}:{remoteEp.Port}";
+        var now = DateTime.UtcNow;
+        bool isNew = false;
+        lock (_lock)
+        {
+            if (!_seenDevices.TryGetValue(key, out var last) || (now - last) > TimeSpan.FromSeconds(10))
+            {
+                _seenDevices[key] = now;
+                isNew = true;
+            }
+        }
+        if (!isNew) return;
+
+        OnClientDiscovered?.Invoke(deviceName, remoteEp);
+    }
+
+    /// <summary>
+    /// Gets the broadcast address for each active IPv4 network interface.
+    /// E.g. for 192.168.137.1/24 → returns 192.168.137.255
+    /// </summary>
+    private static List<IPAddress> GetAllBroadcastAddresses()
+    {
+        var addresses = new List<IPAddress>();
+        try
+        {
+            foreach (var iface in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (iface.OperationalStatus != OperationalStatus.Up) continue;
+                if (iface.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+
+                foreach (var uniAddr in iface.GetIPProperties().UnicastAddresses)
+                {
+                    if (uniAddr.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    if (IPAddress.IsLoopback(uniAddr.Address)) continue;
+
+                    var ip = uniAddr.Address.GetAddressBytes();
+                    var mask = uniAddr.IPv4Mask.GetAddressBytes();
+
+                    if (mask.All(b => b == 0)) continue;
+
+                    var broadcast = new byte[4];
+                    for (int i = 0; i < 4; i++)
+                        broadcast[i] = (byte)(ip[i] | ~mask[i]);
+
+                    addresses.Add(IPAddress.Parse(string.Join(".", broadcast)));
+                }
+            }
+        }
+        catch { }
+        return addresses;
+    }
+    private static bool IsBroadcastAddress(IPAddress address)
+    {
+        try
+        {
+            if (address.Equals(IPAddress.Broadcast)) return true;
+            var bytes = address.GetAddressBytes();
+            return bytes.All(b => b == 255);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Collects all IPv4 addresses assigned to this machine, used to ignore
+    /// our own broadcast packets.
+    /// </summary>
+    private static HashSet<IPAddress> CollectLocalIps()
+    {
+        var set = new HashSet<IPAddress> { IPAddress.Loopback };
+        try
+        {
+            foreach (var iface in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (iface.OperationalStatus != OperationalStatus.Up) continue;
+                foreach (var uniAddr in iface.GetIPProperties().UnicastAddresses)
+                {
+                    if (uniAddr.Address.AddressFamily == AddressFamily.InterNetwork)
+                        set.Add(uniAddr.Address);
+                }
+            }
+        }
+        catch { }
+        return set;
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _udp?.Close();
+        _udp?.Dispose();
+        _cts?.Dispose();
+    }
+}
+
+--------------------------------------------------------------------------------
+8.7  server/src/GamePadServer/Network/InputListener.cs
+--------------------------------------------------------------------------------
+using System.Net;
+using System.Net.Sockets;
+using GamePadEcosystem.Server.Core;
+using GamePadEcosystem.Server.VirtualController;
+using Protocol = GamePadEcosystem.Server.Core.Protocol;
+
+namespace GamePadEcosystem.Server.Network;
+
+/// <summary>
+/// High-performance UDP input listener.
+/// Runs on a dedicated async task with a large receive buffer.
+/// Routes incoming packets to the appropriate virtual controller.
+/// </summary>
+public sealed class InputListener : IDisposable
+{
+    private UdpClient? _udp;
+    private CancellationTokenSource? _cts;
+    private Task? _listenTask;
+    private readonly ClientManager _clientManager;
+    private readonly ControllerManager _controllerManager;
+
+    /// <summary>
+    /// Fires for every valid input packet received.
+    /// </summary>
+    public event Action<byte, InputPacket>? OnInputReceived;
+
+    public InputListener(ClientManager clientManager, ControllerManager controllerManager)
+    {
+        _clientManager = clientManager;
+        _controllerManager = controllerManager;
+    }
+
+    public void Start()
+    {
+        _udp = new UdpClient(new IPEndPoint(IPAddress.Any, Protocol.UdpPort));
+        _udp.Client.ReceiveBufferSize = 2 * 1024 * 1024; // 2MB buffer
+        _udp.Client.ReceiveTimeout = 5000;
+        _cts = new CancellationTokenSource();
+
+        Console.ForegroundColor = ConsoleColor.DarkCyan;
+        Console.WriteLine($"[Input] Listening on UDP port {Protocol.UdpPort}");
+        Console.ResetColor();
+
+        _listenTask = Task.Run(async () =>
+        {
+            while (!_cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    var result = await _udp.ReceiveAsync(_cts.Token);
+                    _ = ProcessPacketAsync(result.Buffer, result.RemoteEndPoint);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (SocketException) { break; }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Input] Error: {ex.Message}");
+                }
+            }
+        });
+    }
+
+    private Task ProcessPacketAsync(byte[] data, IPEndPoint remoteEp)
+    {
+        ProcessPacket(data, remoteEp);
+        return Task.CompletedTask;
+    }
+
+    private void ProcessPacket(byte[] data, IPEndPoint remoteEp)
+    {
+        if (data.Length < InputPacket.Size)
+            return;
+
+        var packet = InputPacket.Deserialize(data);
+        if (!packet.IsValid())
+        {
+            Console.WriteLine($"[Input] Invalid packet from {remoteEp} (magic=0x{packet.Magic:X8})");
+            return;
+        }
+
+        // Assign slot for new clients
+        if (!_clientManager.TryGetSlot(remoteEp, out var slot))
+        {
+            slot = _clientManager.AssignSlot(remoteEp, $"Phone-{remoteEp.Port}");
+            // Send assignment response back to client
+            _ = SendAssignmentAsync(remoteEp, (byte)slot);
+        }
+
+        var client = _clientManager.GetClient(slot);
+        if (client == null || !client.IsConnected)
+            return;
+
+        client.LastSeen = DateTime.UtcNow;
+        client.LastSequence = packet.Sequence;
+        packet.DeviceId = (byte)slot;
+
+        // Skip heartbeat-only packets — just update LastSeen above
+        if (packet.PacketType == (byte)Protocol.PacketType.Heartbeat)
+            return;
+
+        // Forward to virtual controller
+        _controllerManager.UpdateController(slot, packet);
+        OnInputReceived?.Invoke((byte)slot, packet);
+    }
+
+    private async Task SendAssignmentAsync(IPEndPoint clientEp, byte slot)
+    {
+        try
+        {
+            var assignment = new AssignmentPacket { PlayerSlot = slot, ServerName = Dns.GetHostName() };
+            var response = assignment.Serialize();
+            if (_udp != null)
+                await _udp.SendAsync(response, response.Length, clientEp);
+
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"[Input] Sent assignment: Player {slot + 1} → {clientEp}");
+            Console.ResetColor();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Input] Failed to send assignment: {ex.Message}");
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _udp?.Close();
+        _udp?.Dispose();
+        _cts?.Dispose();
+    }
+}
+
+--------------------------------------------------------------------------------
+8.8  server/src/GamePadServer/Network/HotspotManager.cs
+--------------------------------------------------------------------------------
+using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using Microsoft.Win32;
+
+namespace GamePadEcosystem.Server.Network;
+
+public sealed class HotspotManager : IDisposable
+{
+    private const string DefaultSsid = "GamePad_Server";
+    private const string DefaultKey = "gamepad123";
+    private const string IcsScopeIp = "192.168.137.1";
+    private const string IcsSubnet = "255.255.255.0";
+    private const string SharedAccessParams = @"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters";
+
+    private readonly string _ssid;
+    private readonly string _key;
+    private bool _isRunning;
+    private Process? _hotspotProcess;
+
+    public IPAddress? HotspotIp { get; private set; }
+    public string? HotspotAdapterName { get; private set; }
+    public bool IsRunning => _isRunning;
+
+    public HotspotManager(string? ssid = null, string? key = null)
+    {
+        _ssid = ssid ?? DefaultSsid;
+        _key = key ?? DefaultKey;
+    }
+
+    public bool Start()
+    {
+        Console.ForegroundColor = ConsoleColor.DarkCyan;
+        Console.WriteLine($"[Hotspot] Setting up WiFi hotspot: {_ssid}");
+        Console.ResetColor();
+
+        EnsureWifiAdapterEnabled();
+
+        // Ensure the always-connected loopback adapter exists. Windows refuses to
+        // start the hotspot without a valid connection profile, and it rejects
+        // remembered-but-disconnected Wi-Fi networks. The loopback adapter is a
+        // real, always-connected virtual NIC, so the hotspot works even with no
+        // Wi-Fi / cellular / Ethernet connected at all.
+        LoopbackAdapter.EnsureCreated();
+
+        if (TryTetheringApi())
+        {
+            DisableAutoShutdown();
+            StartKeepAlive();
+            return true;
+        }
+
+        if (CheckHostedNetworkSupport() && TryHostedNetwork())
+        {
+            StartKeepAlive();
+            return true;
+        }
+
+        if (EnableMobileHotspot())
+        {
+            DisableAutoShutdown();
+            StartKeepAlive();
+            return true;
+        }
+
+        return UseExistingLan();
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // HOTSPOT KEEP-ALIVE
+    // ════════════════════════════════════════════════════════════════════
+    // Windows kills the Mobile Hotspot after ~5 minutes with no connected
+    // device. Disable that and optionally restart the hotspot if it drops.
+
+    private void DisableAutoShutdown()
+    {
+        try
+        {
+            RunCmd("reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Services\\icssvc\\Settings\" /v PeerlessTimeoutEnabled /t REG_DWORD /d 0 /f");
+            Log("Hotspot", "Disabled hotspot auto-shutdown (PeerlessTimeoutEnabled=0)");
+        }
+        catch (Exception ex)
+        {
+            Log("Hotspot", $"Auto-shutdown disable: {ex.Message}");
+        }
+    }
+
+    private CancellationTokenSource? _keepAliveCts;
+
+    private void StartKeepAlive()
+    {
+        if (_keepAliveCts != null) return;
+        _keepAliveCts = new CancellationTokenSource();
+        var token = _keepAliveCts.Token;
+
+        Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(30_000, token);
+                    if (!IsHotspotStillUp() && !UseExistingLan())
+                    {
+                        Log("Hotspot", "Hotspot dropped — restarting...");
+                        var restarted = TryTetheringApi() ||
+                                       (CheckHostedNetworkSupport() && TryHostedNetwork()) ||
+                                       EnableMobileHotspot();
+                        if (restarted) DisableAutoShutdown();
+                    }
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    Log("Hotspot", $"Keep-alive: {ex.Message}");
+                }
+            }
+        });
+    }
+
+    private bool IsHotspotStillUp()
+    {
+        if (!_isRunning) return false;
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+            var desc = ni.Description;
+            if (desc.Contains("Microsoft Wi-Fi Direct") ||
+                desc.Contains("Wi-Fi Direct") ||
+                desc.Contains("Local Area Connection*") ||
+                desc.Contains("Mobile Hotspot"))
+                return true;
+        }
+        return false;
+    }
+
+    public void Dispose()
+    {
+        _isRunning = false;
+        try
+        {
+            if (_hotspotProcess != null && !_hotspotProcess.HasExited)
+            {
+                _hotspotProcess.Kill();
+                _hotspotProcess.Dispose();
+                Log("Hotspot", "Hotspot process stopped");
+            }
+        }
+        catch { }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // STRATEGY 1: NetworkOperatorTetheringManager
+    // ════════════════════════════════════════════════════════════════════
+    // This is what Windows Settings uses internally.
+    // Key finding: it works with ANY saved WiFi profile, even when
+    // WiFi is not connected. The WiFi adapter just needs to be enabled.
+    //
+    // Priority order for connection profile:
+    //   1. GetInternetConnectionProfile() — active WiFi/Ethernet/cellular
+    //   2. First saved WLAN profile from GetConnectionProfiles()
+    //   3. Any connection profile with connectivity
+    // ════════════════════════════════════════════════════════════════════
+
+    private bool TryTetheringApi()
+    {
+        Log("Hotspot", "Strategy: NetworkOperatorTetheringManager (Windows native hotspot)");
+
+        var scriptPath = Path.Combine(Path.GetTempPath(), "gamepad_tether.ps1");
+        try { File.WriteAllText(scriptPath, BuildTetheringScript()); }
+        catch (Exception ex) { Log("Hotspot", $"Script write error: {ex.Message}"); return false; }
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell",
+                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{scriptPath}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            _hotspotProcess = Process.Start(psi);
+            if (_hotspotProcess == null) { Log("Hotspot", "Failed to start PowerShell"); return false; }
+
+            // Use async reads — the PS script runs an infinite loop to keep hotspot alive,
+            // so synchronous ReadToEnd() would block forever waiting for process exit.
+            var outputBuffer = new System.Text.StringBuilder();
+            var errorBuffer = new System.Text.StringBuilder();
+            var stdoutDone = new ManualResetEventSlim();
+            var stderrDone = new ManualResetEventSlim();
+
+            _hotspotProcess.OutputDataReceived += (s, e) =>
+            {
+                if (e.Data != null) { lock (outputBuffer) { outputBuffer.AppendLine(e.Data); } }
+                else stdoutDone.Set();
+            };
+            _hotspotProcess.ErrorDataReceived += (s, e) =>
+            {
+                if (e.Data != null) { lock (errorBuffer) { errorBuffer.AppendLine(e.Data); } }
+                else stderrDone.Set();
+            };
+
+            _hotspotProcess.BeginOutputReadLine();
+            _hotspotProcess.BeginErrorReadLine();
+
+            // Wait up to 45 seconds for the script to signal HOTSPOT_ACTIVE or ERROR
+            var deadline = DateTime.UtcNow.AddSeconds(45);
+            var gotActive = false;
+            var gotError = false;
+            while (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(500);
+                lock (outputBuffer)
+                {
+                    if (outputBuffer.ToString().Contains("HOTSPOT_ACTIVE")) gotActive = true;
+                    if (outputBuffer.ToString().Contains("ERROR")) gotError = true;
+                }
+                if (gotActive || gotError) break;
+            }
+
+            var stdout = outputBuffer.ToString();
+            var stderr = errorBuffer.ToString();
+            Log("Hotspot", $"Output: {stdout.Trim()}");
+            if (!string.IsNullOrWhiteSpace(stderr))
+                Log("Hotspot", $"Stderr: {stderr.Trim()}");
+
+            if (gotError)
+            {
+                Log("Hotspot", "Tethering API failed");
+                return false;
+            }
+
+            if (!gotActive)
+            {
+                Log("Hotspot", "Tethering did not signal HOTSPOT_ACTIVE within timeout");
+                if (_hotspotProcess != null && !_hotspotProcess.HasExited && _hotspotProcess.ExitCode != 0)
+                {
+                    Log("Hotspot", $"Tethering exited with code {_hotspotProcess.ExitCode}");
+                    return false;
+                }
+            }
+
+            Log("Hotspot", "Tethering API reports hotspot is active");
+        }
+        catch (Exception ex)
+        {
+            Log("Hotspot", $"Tethering error: {ex.Message}");
+            return false;
+        }
+
+        // Wait for the hotspot adapter to appear
+        Log("Hotspot", "Waiting for hotspot adapter...");
+        for (int i = 0; i < 20; i++)
+        {
+            Thread.Sleep(1000);
+            if (_hotspotProcess != null && _hotspotProcess.HasExited && _hotspotProcess.ExitCode != 0)
+            {
+                Log("Hotspot", "Tethering process exited with error");
+                return false;
+            }
+            if (FindHotspotAdapter())
+            {
+                _isRunning = true;
+                LogSuccess();
+                return true;
+            }
+            if (i % 5 == 4)
+                Log("Hotspot", $"  Waiting... ({i + 1}/20)");
+        }
+
+        Log("Hotspot", "Hotspot adapter did not appear");
+        Dispose();
+        return false;
+    }
+
+    private string BuildTetheringScript()
+    {
+        var ssidEsc = _ssid.Replace("'", "''");
+        var keyEsc = _key.Replace("'", "''");
+
+        return @"
+$ErrorActionPreference = 'Stop'
+try {
+    Add-Type -AssemblyName System.Runtime.WindowsRuntime
+
+    $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+    function Await($WinRtTask, $ResultType) {
+        $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+        $netTask = $asTask.Invoke($null, @($WinRtTask))
+        $netTask.Wait(-1) | Out-Null
+        $netTask.Result
+    }
+
+    [Windows.Networking.Connectivity.NetworkInformation,Windows.Networking.Connectivity,ContentType=WindowsRuntime] | Out-Null
+    [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime] | Out-Null
+    [Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult,Windows.Networking.NetworkOperators,ContentType=WindowsRuntime] | Out-Null
+
+    # Stop any existing hotspot first
+    try {
+        $existingCp = [Windows.Networking.Connectivity.NetworkInformation]::GetInternetConnectionProfile()
+        if ($existingCp) {
+            $existingTm = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]::CreateFromConnectionProfile($existingCp)
+            if ($existingTm.TetheringOperationalState -eq 'On') {
+                Await ($existingTm.StopTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult]) | Out-Null
+                Start-Sleep -Seconds 2
+            }
+        }
+    } catch {}
+
+    # Find the best connection profile
+    $connectionProfile = $null
+
+    # Priority 1: Active internet connection
+    $connectionProfile = [Windows.Networking.Connectivity.NetworkInformation]::GetInternetConnectionProfile()
+    if ($connectionProfile) {
+        Write-Host ""Using active connection: $($connectionProfile.ProfileName)""
+    }
+
+    # Priority 2: Any profile that is actually connected (WiFi/Ethernet/cellular)
+    if (-not $connectionProfile) {
+        $conn = @([Windows.Networking.Connectivity.NetworkInformation]::GetConnectionProfiles() | Where-Object { $_.GetNetworkConnectivityLevel() -ne 'Disconnected' })
+        if ($conn.Count -gt 0) {
+            $connectionProfile = $conn[0]
+            Write-Host ""Using connected profile: $($connectionProfile.ProfileName)""
+        }
+    }
+
+    # Priority 3: The loopback adapter (always connected — offline hotspot trick).
+    # Windows rejects remembered-but-disconnected Wi-Fi profiles, so when the PC
+    # has NO active network at all we hand it the virtual loopback adapter.
+    if (-not $connectionProfile) {
+        $lb = @([Windows.Networking.Connectivity.NetworkInformation]::GetConnectionProfiles() | Where-Object { $_.ProfileName -eq 'GamePad Loopback' })
+        if ($lb.Count -gt 0) {
+            $connectionProfile = $lb[0]
+            Write-Host ""Using loopback adapter: $($connectionProfile.ProfileName)""
+        }
+    }
+
+    # Priority 4: Any profile at all
+    if (-not $connectionProfile) {
+        $allProfiles = [Windows.Networking.Connectivity.NetworkInformation]::GetConnectionProfiles()
+        if ($allProfiles.Count -gt 0) {
+            $connectionProfile = $allProfiles[0]
+            Write-Host ""Using first available profile: $($connectionProfile.ProfileName)""
+        }
+    }
+
+    if (-not $connectionProfile) {
+        Write-Host 'ERROR: No connection profile available'
+        exit 1
+    }
+
+    # Create tethering manager and start hotspot
+    $tetheringManager = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]::CreateFromConnectionProfile($connectionProfile)
+    $state = $tetheringManager.TetheringOperationalState
+    Write-Host ""Current state: $state""
+
+    if ($state -eq 'On') {
+        Write-Host 'HOTSPOT_ACTIVE'
+        try { $null = Await ($tetheringManager.DisableNoConnectionsTimeoutAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult]) } catch {}
+        try { while ($true) { Start-Sleep -Seconds 5 } } catch { }
+    }
+
+    # Start with per-session config (sets SSID + password)
+    $started = $false
+    try {
+        $config = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringSessionAccessPointConfiguration]::new()
+        $config.Ssid = 'GamePad_Server'
+        $config.Passphrase = 'gamepad123'
+        $result = Await ($tetheringManager.StartTetheringAsync($config)) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
+        Write-Host ""Config start result: $($result.Status)""
+        if ($result.Status -eq 'Success') { $started = $true }
+    } catch {
+        Write-Host ""Config start failed: $($_.Exception.Message)""
+    }
+
+    # Fallback: simple start (uses previously configured SSID/password)
+    if (-not $started) {
+        try {
+            $result = Await ($tetheringManager.StartTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
+            Write-Host ""Simple start result: $($result.Status)""
+            if ($result.Status -eq 'Success') { $started = $true }
+        } catch {
+            Write-Host ""Simple start failed: $($_.Exception.Message)""
+        }
+    }
+
+    # Check final state
+    Start-Sleep -Seconds 2
+    $finalState = $tetheringManager.TetheringOperationalState
+    Write-Host ""Final state: $finalState""
+
+    if ($started -or $finalState -eq 'On') {
+        Write-Host 'HOTSPOT_ACTIVE'
+        # Keep the hotspot alive even with no connected devices.
+        try { $null = Await ($tetheringManager.DisableNoConnectionsTimeoutAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult]) } catch {}
+        # Keep process alive to maintain hotspot
+        try { while ($true) { Start-Sleep -Seconds 5 } } catch { }
+    } else {
+        Write-Host 'ERROR:Hotspot failed to start'
+        exit 1
+    }
+} catch {
+    Write-Host ""ERROR:$($_.Exception.Message)""
+    exit 1
+}";
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // SHARED HELPERS
+    // ════════════════════════════════════════════════════════════════════
+
+    private void EnsureWifiAdapterEnabled()
+    {
+        try
+        {
+            var adapters = NetworkInterface.GetAllNetworkInterfaces()
+                .Where(ni => ni.Description.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase) ||
+                             ni.Description.Contains("Wireless", StringComparison.OrdinalIgnoreCase) ||
+                             ni.Name.Contains("Wi-Fi", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var adapter in adapters)
+            {
+                if (adapter.OperationalStatus == OperationalStatus.Up)
+                {
+                    Log("Hotspot", $"WiFi adapter is enabled: {adapter.Name}");
+                    return;
+                }
+            }
+
+            Log("Hotspot", "Enabling WiFi adapter...");
+            RunCmd("powershell -NoProfile -Command \"Get-NetAdapter | Where-Object { $_.InterfaceDescription -like '*Wi-Fi*' -or $_.InterfaceDescription -like '*Wireless*' } | Enable-NetAdapter -Confirm:$false\"");
+            Thread.Sleep(3000);
+            Log("Hotspot", "WiFi adapter enabled");
+        }
+        catch (Exception ex)
+        {
+            Log("Hotspot", $"WiFi enable: {ex.Message}");
+        }
+    }
+
+    private bool FindHotspotAdapter()
+    {
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+
+            var desc = ni.Description;
+            var name = ni.Name;
+
+            var isHotspot = desc.Contains("Microsoft Wi-Fi Direct") ||
+                            desc.Contains("Wi-Fi Direct") ||
+                            desc.Contains("Local Area Connection*") ||
+                            (desc.Contains("Virtual") && desc.Contains("Wi-Fi")) ||
+                            desc.Contains("Mobile Hotspot");
+
+            if (!isHotspot) continue;
+
+            var ip = GetIPv4(ni);
+            if (ip != null)
+            {
+                HotspotIp = IPAddress.Parse(ip);
+                HotspotAdapterName = name;
+                Log("Hotspot", $"Found hotspot adapter: {name} ({desc}) -> {ip}");
+                return true;
+            }
+
+            Log("Hotspot", $"Found adapter {name} — assigning IP...");
+            try
+            {
+                RunNetsh($"interface ip set address name=\"{name}\" static {IcsScopeIp} {IcsSubnet}");
+                Thread.Sleep(500);
+                var recheck = GetIPv4(ni);
+                if (recheck != null)
+                {
+                    HotspotIp = IPAddress.Parse(recheck);
+                    HotspotAdapterName = name;
+                    return true;
+                }
+            }
+            catch { }
+        }
+        return false;
+    }
+
+    private bool CheckHostedNetworkSupport()
+    {
+        try
+        {
+            var output = RunNetsh("wlan show drivers");
+            if (output.Contains("Hosted network supported  : Yes")) return true;
+            Log("Hotspot", "Driver does NOT support hosted network");
+            return false;
+        }
+        catch { return false; }
+    }
+
+    private bool TryHostedNetwork()
+    {
+        Log("Hotspot", "Strategy: Hosted network");
+        RunNetsh($"wlan set hostednetwork mode=allow ssid={_ssid} key={_key}");
+        var startOut = RunNetsh("wlan start hostednetwork");
+        if (!startOut.Contains("started")) return false;
+
+        Thread.Sleep(3000);
+        if (FindHotspotAdapter())
+        {
+            _isRunning = true;
+            LogSuccess();
+            return true;
+        }
+        return false;
+    }
+
+    private bool EnableMobileHotspot()
+    {
+        Log("Hotspot", "Strategy: ICS via registry");
+        try
+        {
+            using var paramKey = Registry.LocalMachine.OpenSubKey(SharedAccessParams, true);
+            if (paramKey == null) return false;
+            paramKey.SetValue("ScopeAddress", IcsScopeIp, RegistryValueKind.String);
+            paramKey.SetValue("ScopeAddressBackup", IcsScopeIp, RegistryValueKind.String);
+            paramKey.SetValue("ScopeAddressPool", "192.168.137.2-192.168.137.254", RegistryValueKind.String);
+        }
+        catch { return false; }
+
+        try { RunCmd("sc config SharedAccess start= auto"); RunCmd("net start SharedAccess"); } catch { }
+
+        for (int i = 0; i < 10; i++)
+        {
+            Thread.Sleep(1000);
+            if (FindHotspotAdapter())
+            {
+                _isRunning = true;
+                LogSuccess();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool UseExistingLan()
+    {
+        Log("Hotspot", "No hotspot — using existing LAN IP");
+        var ip = GetBestLanIp();
+        if (ip == null)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("[Hotspot] ERROR: No network connection found.");
+            Console.WriteLine("[Hotspot] Connect to WiFi or Ethernet first.");
+            Console.ResetColor();
+            return false;
+        }
+
+        HotspotIp = IPAddress.Parse(ip);
+        HotspotAdapterName = "LAN";
+        _isRunning = true;
+
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("═══════════════════════════════════════════════════");
+        Console.WriteLine($"  SERVER ON LAN: {ip}:{Core.Protocol.UdpPort}");
+        Console.WriteLine("═══════════════════════════════════════════════════");
+        Console.ResetColor();
+        return true;
+    }
+
+    private static string? GetIPv4(NetworkInterface ni)
+    {
+        try
+        {
+            return ni.GetIPProperties().UnicastAddresses
+                .FirstOrDefault(ua =>
+                    ua.Address.AddressFamily == AddressFamily.InterNetwork &&
+                    !IPAddress.IsLoopback(ua.Address))?
+                .Address.ToString();
+        }
+        catch { return null; }
+    }
+
+    private static string? GetBestLanIp()
+    {
+        try
+        {
+            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socket.Connect("8.8.8.8", 80);
+            return (socket.LocalEndPoint as IPEndPoint)?.Address.ToString();
+        }
+        catch { return null; }
+    }
+
+    private static string RunNetsh(string arguments)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "netsh",
+            Arguments = arguments,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
+        };
+        using var proc = Process.Start(psi);
+        if (proc == null) return string.Empty;
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        proc.WaitForExit(5000);
+        return stdout + stderr;
+    }
+
+    private static string RunCmd(string command)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "cmd",
+            Arguments = $"/c {command}",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        using var proc = Process.Start(psi);
+        if (proc == null) return string.Empty;
+        var output = proc.StandardOutput.ReadToEnd();
+        proc.WaitForExit(5000);
+        return output;
+    }
+
+    private static void Log(string tag, string message)
+    {
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write($"[{tag}] ");
+        Console.ResetColor();
+        Console.WriteLine(message);
+    }
+
+    private void LogSuccess()
+    {
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("═══════════════════════════════════════════════════");
+        Console.WriteLine($"  HOTSPOT ACTIVE: {_ssid}");
+        Console.WriteLine($"  Password:       {_key}");
+        Console.WriteLine($"  Server IP:      {HotspotIp}");
+        Console.WriteLine($"  Adapter:        {HotspotAdapterName}");
+        Console.WriteLine("═══════════════════════════════════════════════════");
+        Console.ResetColor();
+
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("[Hotspot] Connect your phone to this WiFi network.");
+        Console.WriteLine("[Hotspot] The GamePad app will auto-discover the server.");
+        Console.ResetColor();
+    }
+}
+
+--------------------------------------------------------------------------------
+8.9  server/src/GamePadServer/Network/LoopbackAdapter.cs
+--------------------------------------------------------------------------------
+using System.Diagnostics;
+using System.Net.NetworkInformation;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace GamePadEcosystem.Server.Network;
+
+/// <summary>
+/// Ensures a Microsoft KM-TEST Loopback Adapter exists on the system.
+///
+/// Windows refuses to start the Mobile Hotspot (NetworkOperatorTetheringManager)
+/// unless it can hand it a VALID connection profile, and it rejects every profile
+/// whose network is not actually connected — including saved Wi-Fi networks that
+/// are remembered but not connected.
+///
+/// A KM-TEST Loopback Adapter is a virtual network card that is ALWAYS connected.
+/// It gives Windows a real connection profile to share from, so the hotspot can
+/// be started with ZERO physical network connections (no Wi-Fi, no cellular,
+/// no Ethernet). Phones join the hotspot and reach the gamepad server on
+/// 192.168.137.1 — internet is not required for local gamepad traffic.
+///
+/// The device is created root-enumerated from the inbox "netloop.inf" driver
+/// using the SetupAPI — the same operation the "Add Legacy Hardware" wizard and
+/// devcon perform. No third-party tooling or network access is needed.
+/// </summary>
+public static class LoopbackAdapter
+{
+    public const string DisplayName = "GamePad Loopback";
+    private const string StaticIp = "10.99.0.1";
+    private const string StaticSubnet = "255.255.255.0";
+    private const string LoopbackDescription = "Microsoft KM-TEST Loopback Adapter";
+
+    private static readonly Guid NetClassGuid = new("{4d36e972-e325-11ce-bfc1-08002be10318}");
+
+    // ── SetupAPI P/Invoke ───────────────────────────────────────────────────
+    private const uint DIGCF_PRESENT = 0x00000002;
+    private const uint DICD_GENERATE_ID = 0x00000001;
+    private const uint DIF_REGISTERDEVICE = 0x00000019;
+    private const uint DIF_SELECTDEVICE = 0x00000001;
+    private const uint DIF_INSTALLDEVICE = 0x00000002;
+    private const uint SPDIT_COMPATDRIVER = 0x00000001;
+    private const uint SPDRP_HARDWAREID = 0x00000001;
+    private const uint SPDRP_DEVICEDESC = 0x00000000;
+    private const uint DI_QUIETINSTALL = 0x00000080;
+    private const uint DI_NOBROWSE = 0x00000400;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SP_DEVINFO_DATA
+    {
+        public uint cbSize;
+        public Guid ClassGuid;
+        public uint DevInst;
+        public IntPtr Reserved;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct SP_DRVINFO_DATA_V1
+    {
+        public uint cbSize;
+        public uint DriverType;
+        public IntPtr Reserved;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string Description;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string MfgName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string ProviderName;
+        public long DriverDate;
+        public ulong DriverVersion;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct SP_DEVINSTALL_PARAMS
+    {
+        public uint cbSize;
+        public uint Flags;
+        public uint FlagsEx;
+        public IntPtr HwndParent;
+        public IntPtr InstallMsgHandler;
+        public IntPtr InstallMsgHandlerContext;
+        public IntPtr FileQueue;
+        public IntPtr ClassInstallReserved;
+        public uint Reserved;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string DriverPath;
+    }
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr SetupDiGetClassDevsW(ref Guid classGuid, IntPtr enumerator, IntPtr hwndParent, uint flags);
+
+    [DllImport("setupapi.dll", SetLastError = true)]
+    private static extern bool SetupDiEnumDeviceInfo(IntPtr hDevInfo, uint memberIndex, ref SP_DEVINFO_DATA deviceInfoData);
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiGetDeviceInstanceIdW(IntPtr hDevInfo, ref SP_DEVINFO_DATA deviceInfoData, StringBuilder deviceId, uint deviceIdSize, out uint requiredSize);
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiGetDeviceRegistryPropertyW(IntPtr hDevInfo, ref SP_DEVINFO_DATA deviceInfoData, uint property, out uint propertyRegDataType, byte[] propertyBuffer, uint propertyBufferSize, out uint requiredSize);
+
+    [DllImport("setupapi.dll", SetLastError = true)]
+    private static extern bool SetupDiDestroyDeviceInfoList(IntPtr hDevInfo);
+
+    [DllImport("setupapi.dll", SetLastError = true)]
+    private static extern IntPtr SetupDiCreateDeviceInfoList(ref Guid classGuid, IntPtr hwndParent);
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiCreateDeviceInfoW(IntPtr hDevInfo, string deviceName, ref Guid classGuid, string? deviceDescription, IntPtr hwndParent, uint creationFlags, ref SP_DEVINFO_DATA deviceInfoData);
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiSetDeviceRegistryPropertyW(IntPtr hDevInfo, ref SP_DEVINFO_DATA deviceInfoData, uint property, byte[] propertyBuffer, uint propertyBufferSize);
+
+    [DllImport("setupapi.dll", SetLastError = true)]
+    private static extern bool SetupDiCallClassInstaller(uint installFunction, IntPtr hDevInfo, ref SP_DEVINFO_DATA deviceInfoData);
+
+    [DllImport("setupapi.dll", SetLastError = true)]
+    private static extern bool SetupDiBuildDriverInfoList(IntPtr hDevInfo, ref SP_DEVINFO_DATA deviceInfoData, uint driverType);
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiEnumDriverInfoW(IntPtr hDevInfo, ref SP_DEVINFO_DATA deviceInfoData, uint driverType, uint memberIndex, ref SP_DRVINFO_DATA_V1 driverInfoData);
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiSetSelectedDriverW(IntPtr hDevInfo, ref SP_DEVINFO_DATA deviceInfoData, ref SP_DRVINFO_DATA_V1 driverInfoData);
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiGetDeviceInstallParamsW(IntPtr hDevInfo, ref SP_DEVINFO_DATA deviceInfoData, ref SP_DEVINSTALL_PARAMS deviceInstallParams);
+
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool SetupDiSetDeviceInstallParamsW(IntPtr hDevInfo, ref SP_DEVINFO_DATA deviceInfoData, ref SP_DEVINSTALL_PARAMS deviceInstallParams);
+
+    /// <summary>
+    /// Returns the name of the loopback adapter if it already exists.
+    /// Matches ONLY the KM-TEST virtual NIC — "Loopback Pseudo-Interface 1"
+    /// (the 127.0.0.1 pseudo interface) must not be treated as our adapter.
+    /// </summary>
+    public static string? FindExisting()
+    {
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.Description.Contains("Microsoft KM-TEST Loopback Adapter", StringComparison.OrdinalIgnoreCase))
+                return ni.Name;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Ensures the loopback adapter exists, is enabled, named and configured.
+    /// Returns the interface name, or null if it could not be provisioned.
+    /// </summary>
+    public static string? EnsureCreated()
+    {
+        var existing = FindExisting();
+        if (existing != null)
+        {
+            Log($"Loopback adapter already present: '{existing}'");
+            Configure(existing);
+            return existing;
+        }
+
+        Log("Creating Microsoft KM-TEST Loopback Adapter...");
+        if (!CreateDevice())
+        {
+            Log("SetupAPI: device creation failed");
+            return null;
+        }
+
+        Log("Waiting for loopback adapter to appear...");
+        var name = WaitForAdapter(TimeSpan.FromSeconds(30));
+        if (name == null)
+        {
+            Log("Loopback adapter did not appear after creation");
+            return null;
+        }
+
+        Log($"Loopback adapter created: '{name}'");
+        Configure(name);
+        return name;
+    }
+
+    // ── Device creation (SetupAPI) ──────────────────────────────────────────
+
+    private static bool CreateDevice()
+    {
+        var instanceId = NextFreeInstanceId();
+        if (instanceId == null)
+        {
+            Log("Unable to find a free ROOT\\NET instance id");
+            return false;
+        }
+
+        var createClass = NetClassGuid;
+        var hDevInfo = SetupDiCreateDeviceInfoList(ref createClass, IntPtr.Zero);
+        if (hDevInfo == IntPtr.Zero || hDevInfo == new IntPtr(-1))
+        {
+            Log($"SetupDiCreateDeviceInfoList failed: {Marshal.GetLastWin32Error()}");
+            return false;
+        }
+
+        try
+        {
+            var classGuid = NetClassGuid;
+            var devInfoData = new SP_DEVINFO_DATA { cbSize = (uint)Marshal.SizeOf<SP_DEVINFO_DATA>() };
+            if (!SetupDiCreateDeviceInfoW(hDevInfo, instanceId, ref classGuid, null, IntPtr.Zero, DICD_GENERATE_ID, ref devInfoData))
+            {
+                Log($"SetupDiCreateDeviceInfo failed: {Marshal.GetLastWin32Error()}");
+                return false;
+            }
+
+            var hardwareIds = Encoding.Unicode.GetBytes($"{instanceId}\0*msloop\0\0");
+            if (!SetupDiSetDeviceRegistryPropertyW(hDevInfo, ref devInfoData, SPDRP_HARDWAREID, hardwareIds, (uint)hardwareIds.Length))
+            {
+                Log($"SetupDiSetDeviceRegistryProperty(SPDRP_HARDWAREID) failed: {Marshal.GetLastWin32Error()}");
+                return false;
+            }
+
+            if (!SetupDiCallClassInstaller(DIF_REGISTERDEVICE, hDevInfo, ref devInfoData))
+            {
+                Log($"DIF_REGISTERDEVICE failed: {Marshal.GetLastWin32Error()}");
+                return false;
+            }
+
+            // Quiet install — no UI prompts.
+            var installParams = new SP_DEVINSTALL_PARAMS { cbSize = (uint)Marshal.SizeOf<SP_DEVINSTALL_PARAMS>() };
+            if (SetupDiGetDeviceInstallParamsW(hDevInfo, ref devInfoData, ref installParams))
+            {
+                installParams.Flags |= DI_QUIETINSTALL | DI_NOBROWSE;
+                SetupDiSetDeviceInstallParamsW(hDevInfo, ref devInfoData, ref installParams);
+            }
+
+            if (!SetupDiBuildDriverInfoList(hDevInfo, ref devInfoData, SPDIT_COMPATDRIVER))
+            {
+                Log($"SetupDiBuildDriverInfoList failed: {Marshal.GetLastWin32Error()}");
+                return false;
+            }
+
+            var drvInfoData = new SP_DRVINFO_DATA_V1
+            {
+                cbSize = (uint)Marshal.SizeOf<SP_DRVINFO_DATA_V1>(),
+                Description = string.Empty,
+                MfgName = string.Empty,
+                ProviderName = string.Empty,
+            };
+
+            var found = false;
+            uint index = 0;
+            while (SetupDiEnumDriverInfoW(hDevInfo, ref devInfoData, SPDIT_COMPATDRIVER, index, ref drvInfoData))
+            {
+                if (drvInfoData.Description.Contains("Loopback", StringComparison.OrdinalIgnoreCase))
+                {
+                    found = true;
+                    break;
+                }
+                index++;
+            }
+
+            if (!found)
+            {
+                Log("No loopback driver found in the driver list");
+                return false;
+            }
+
+            if (!SetupDiSetSelectedDriverW(hDevInfo, ref devInfoData, ref drvInfoData))
+            {
+                Log($"SetupDiSetSelectedDriver failed: {Marshal.GetLastWin32Error()}");
+                return false;
+            }
+
+            if (!SetupDiCallClassInstaller(DIF_SELECTDEVICE, hDevInfo, ref devInfoData))
+            {
+                Log($"DIF_SELECTDEVICE failed: {Marshal.GetLastWin32Error()}");
+                return false;
+            }
+
+            if (!SetupDiCallClassInstaller(DIF_INSTALLDEVICE, hDevInfo, ref devInfoData))
+            {
+                Log($"DIF_INSTALLDEVICE failed: {Marshal.GetLastWin32Error()}");
+                return false;
+            }
+
+            Log("Device created and driver installed");
+            return true;
+        }
+        finally
+        {
+            SetupDiDestroyDeviceInfoList(hDevInfo);
+        }
+    }
+
+    private static string? NextFreeInstanceId()
+    {
+        var used = new HashSet<string>();
+        var classGuid = NetClassGuid;
+        var hDevInfo = SetupDiGetClassDevsW(ref classGuid, IntPtr.Zero, IntPtr.Zero, DIGCF_PRESENT);
+        if (hDevInfo == IntPtr.Zero || hDevInfo == new IntPtr(-1))
+            return null;
+
+        try
+        {
+            uint index = 0;
+            while (true)
+            {
+                var devInfoData = new SP_DEVINFO_DATA { cbSize = (uint)Marshal.SizeOf<SP_DEVINFO_DATA>() };
+                if (!SetupDiEnumDeviceInfo(hDevInfo, index, ref devInfoData))
+                    break;
+
+                var sb = new StringBuilder(256);
+                if (SetupDiGetDeviceInstanceIdW(hDevInfo, ref devInfoData, sb, (uint)sb.Capacity, out _))
+                    used.Add(sb.ToString().ToUpperInvariant());
+                index++;
+            }
+        }
+        finally
+        {
+            SetupDiDestroyDeviceInfoList(hDevInfo);
+        }
+
+        for (int i = 1; i < 1000; i++)
+        {
+            var id = $"ROOT\\NET\\{i:0000}";
+            if (!used.Contains(id))
+                return id;
+        }
+        return null;
+    }
+
+    // ── Post-creation configuration ─────────────────────────────────────────
+
+    private static string? WaitForAdapter(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var name = FindExisting();
+            if (name != null)
+                return name;
+            Thread.Sleep(500);
+        }
+        return null;
+    }
+
+    private static void Configure(string name)
+    {
+        try
+        {
+            RunNetsh($"interface set interface name=\"{name}\" admin=enable");
+
+            if (!name.Equals(DisplayName, StringComparison.OrdinalIgnoreCase))
+            {
+                RunNetsh($"interface set interface name=\"{name}\" newname=\"{DisplayName}\"");
+                name = DisplayName;
+            }
+
+            RunNetsh($"interface ip set address name=\"{name}\" static {StaticIp} {StaticSubnet}");
+            Log($"Loopback adapter configured: {DisplayName} = {StaticIp}/{StaticSubnet}");
+        }
+        catch (Exception ex)
+        {
+            Log($"Loopback configuration error: {ex.Message}");
+        }
+    }
+
+    private static string RunNetsh(string arguments)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "netsh",
+            Arguments = arguments,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+        using var proc = Process.Start(psi);
+        if (proc == null) return string.Empty;
+        var stdout = proc.StandardOutput.ReadToEnd();
+        var stderr = proc.StandardError.ReadToEnd();
+        proc.WaitForExit(5000);
+        return stdout + stderr;
+    }
+
+    private static void Log(string message)
+    {
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write("[Loopback] ");
+        Console.ResetColor();
+        Console.WriteLine(message);
+    }
+}
+
+--------------------------------------------------------------------------------
+8.10  server/src/GamePadServer/VirtualController/ControllerManager.cs
+--------------------------------------------------------------------------------
+using Nefarius.ViGEm.Client;
+using Nefarius.ViGEm.Client.Targets;
+using Nefarius.ViGEm.Client.Targets.Xbox360;
+using GamePadEcosystem.Server.Core;
+
+namespace GamePadEcosystem.Server.VirtualController;
+
+/// <summary>
+/// Manages ViGEmBus virtual Xbox 360 controller instances.
+/// Dynamically creates/destroys virtual controllers as phones connect/disconnect.
+/// Maps binary input packets to native Xbox 360 controller state.
+/// </summary>
+public sealed class ControllerManager : IDisposable
+{
+    private readonly ViGEmClient _viGemClient;
+    private readonly IXbox360Controller?[] _controllers = new IXbox360Controller[Protocol.MaxPlayers];
+    private readonly bool[] _active = new bool[Protocol.MaxPlayers];
+    private readonly DateTime[] _lastInput = new DateTime[Protocol.MaxPlayers];
+    private readonly object[] _locks = new object[Protocol.MaxPlayers];
+
+    public ControllerManager()
+    {
+        for (int i = 0; i < Protocol.MaxPlayers; i++)
+            _locks[i] = new object();
+
+        _viGemClient = new ViGEmClient();
+
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("[ViGEm] ViGEmClient initialized — driver connected");
+        Console.ResetColor();
+    }
+
+    /// <summary>
+    /// Creates a new virtual Xbox 360 controller for the given player slot.
+    /// </summary>
+    public void CreateController(int slot)
+    {
+        if (slot < 0 || slot >= Protocol.MaxPlayers) return;
+
+        lock (_locks[slot])
+        {
+            if (_controllers[slot] != null) return;
+
+            try
+            {
+                var controller = _viGemClient.CreateXbox360Controller();
+                controller.Connect();
+                _controllers[slot] = controller;
+                _active[slot] = true;
+                _lastInput[slot] = DateTime.UtcNow;
+
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine($"[ViGEm] Xbox 360 Controller #{slot + 1} connected");
+                Console.ResetColor();
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"[ViGEm] Failed to create controller #{slot + 1}: {ex.Message}");
+                Console.ResetColor();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Forwards an input packet to the matching virtual controller.
+    /// Auto-creates the controller if it doesn't exist yet.
+    /// </summary>
+    public void UpdateController(int slot, InputPacket packet)
+    {
+        if (slot < 0 || slot >= Protocol.MaxPlayers) return;
+        if (_controllers[slot] == null) CreateController(slot);
+
+        lock (_locks[slot])
+        {
+            var controller = _controllers[slot];
+            if (controller == null || !_active[slot]) return;
+
+            try
+            {
+                _lastInput[slot] = DateTime.UtcNow;
+
+                // Map digital buttons using static fields on Xbox360Button
+                controller.SetButtonState(Xbox360Button.A, (packet.Buttons & (uint)Protocol.ButtonFlag.A) != 0);
+                controller.SetButtonState(Xbox360Button.B, (packet.Buttons & (uint)Protocol.ButtonFlag.B) != 0);
+                controller.SetButtonState(Xbox360Button.X, (packet.Buttons & (uint)Protocol.ButtonFlag.X) != 0);
+                controller.SetButtonState(Xbox360Button.Y, (packet.Buttons & (uint)Protocol.ButtonFlag.Y) != 0);
+                controller.SetButtonState(Xbox360Button.LeftShoulder, (packet.Buttons & (uint)Protocol.ButtonFlag.LeftBumper) != 0);
+                controller.SetButtonState(Xbox360Button.RightShoulder, (packet.Buttons & (uint)Protocol.ButtonFlag.RightBumper) != 0);
+                controller.SetButtonState(Xbox360Button.Back, (packet.Buttons & (uint)Protocol.ButtonFlag.Back) != 0);
+                controller.SetButtonState(Xbox360Button.Start, (packet.Buttons & (uint)Protocol.ButtonFlag.Start) != 0);
+                controller.SetButtonState(Xbox360Button.LeftThumb, (packet.Buttons & (uint)Protocol.ButtonFlag.LeftStick) != 0);
+                controller.SetButtonState(Xbox360Button.RightThumb, (packet.Buttons & (uint)Protocol.ButtonFlag.RightStick) != 0);
+                controller.SetButtonState(Xbox360Button.Up, (packet.Buttons & (uint)Protocol.ButtonFlag.DPadUp) != 0);
+                controller.SetButtonState(Xbox360Button.Down, (packet.Buttons & (uint)Protocol.ButtonFlag.DPadDown) != 0);
+                controller.SetButtonState(Xbox360Button.Left, (packet.Buttons & (uint)Protocol.ButtonFlag.DPadLeft) != 0);
+                controller.SetButtonState(Xbox360Button.Right, (packet.Buttons & (uint)Protocol.ButtonFlag.DPadRight) != 0);
+                controller.SetButtonState(Xbox360Button.Guide, (packet.Buttons & (uint)Protocol.ButtonFlag.Guide) != 0);
+
+                // Map analog thumbsticks
+                controller.SetAxisValue(Xbox360Axis.LeftThumbX, packet.LeftX);
+                controller.SetAxisValue(Xbox360Axis.LeftThumbY, packet.LeftY);
+                controller.SetAxisValue(Xbox360Axis.RightThumbX, packet.RightX);
+                controller.SetAxisValue(Xbox360Axis.RightThumbY, packet.RightY);
+
+                // Map analog triggers
+                controller.SetSliderValue(Xbox360Slider.LeftTrigger, packet.LeftTrigger);
+                controller.SetSliderValue(Xbox360Slider.RightTrigger, packet.RightTrigger);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ViGEm] Error updating controller #{slot + 1}: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resets all inputs to neutral — prevents "stick drift" on disconnected controllers.
+    /// </summary>
+    public void ZeroController(int slot)
+    {
+        if (slot < 0 || slot >= Protocol.MaxPlayers) return;
+
+        lock (_locks[slot])
+        {
+            var controller = _controllers[slot];
+            if (controller == null) return;
+
+            try
+            {
+                controller.SetButtonState(Xbox360Button.A, false);
+                controller.SetButtonState(Xbox360Button.B, false);
+                controller.SetButtonState(Xbox360Button.X, false);
+                controller.SetButtonState(Xbox360Button.Y, false);
+                controller.SetButtonState(Xbox360Button.LeftShoulder, false);
+                controller.SetButtonState(Xbox360Button.RightShoulder, false);
+                controller.SetButtonState(Xbox360Button.Back, false);
+                controller.SetButtonState(Xbox360Button.Start, false);
+                controller.SetButtonState(Xbox360Button.Up, false);
+                controller.SetButtonState(Xbox360Button.Down, false);
+                controller.SetButtonState(Xbox360Button.Left, false);
+                controller.SetButtonState(Xbox360Button.Right, false);
+                controller.SetButtonState(Xbox360Button.LeftThumb, false);
+                controller.SetButtonState(Xbox360Button.RightThumb, false);
+                controller.SetButtonState(Xbox360Button.Guide, false);
+
+                controller.SetAxisValue(Xbox360Axis.LeftThumbX, 0);
+                controller.SetAxisValue(Xbox360Axis.LeftThumbY, 0);
+                controller.SetAxisValue(Xbox360Axis.RightThumbX, 0);
+                controller.SetAxisValue(Xbox360Axis.RightThumbY, 0);
+
+                controller.SetSliderValue(Xbox360Slider.LeftTrigger, 0);
+                controller.SetSliderValue(Xbox360Slider.RightTrigger, 0);
+            }
+            catch { /* Controller may be in bad state */ }
+        }
+    }
+
+    public void DestroyController(int slot)
+    {
+        if (slot < 0 || slot >= Protocol.MaxPlayers) return;
+
+        lock (_locks[slot])
+        {
+            try
+            {
+                _controllers[slot]?.Disconnect();
+                _controllers[slot] = null;
+                _active[slot] = false;
+
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"[ViGEm] Xbox 360 Controller #{slot + 1} disconnected");
+                Console.ResetColor();
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// Checks for timed-out controllers, zeros inputs, and disconnects them.
+    /// Prevents runaway inputs from dropped connections.
+    /// </summary>
+    public void CheckDisconnections(TimeSpan timeout)
+    {
+        for (int i = 0; i < Protocol.MaxPlayers; i++)
+        {
+            if (_active[i] && (DateTime.UtcNow - _lastInput[i]) > timeout)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.WriteLine($"[ViGEm] Player {i + 1} timed out — zeroing and disconnecting controller");
+                Console.ResetColor();
+                ZeroController(i);
+                DestroyController(i);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        for (int i = 0; i < Protocol.MaxPlayers; i++)
+            DestroyController(i);
+        _viGemClient?.Dispose();
+    }
+}
+
+--------------------------------------------------------------------------------
+8.11  server/src/GamePadServer/UI/ServerHud.cs
+--------------------------------------------------------------------------------
+using GamePadEcosystem.Server.Core;
+using GamePadEcosystem.Server.VirtualController;
+
+namespace GamePadEcosystem.Server.UI;
+
+public sealed class ServerHud : IDisposable
+{
+    private readonly ClientManager _clientManager;
+    private readonly ControllerManager _controllerManager;
+    private CancellationTokenSource? _cts;
+    private Task? _renderTask;
+
+    private int _totalPackets;
+    private long _totalBytes;
+
+    public void IncrementStats(int bytes)
+    {
+        Interlocked.Increment(ref _totalPackets);
+        Interlocked.Add(ref _totalBytes, bytes);
+    }
+
+    public ServerHud(ClientManager clientManager, ControllerManager controllerManager)
+    {
+        _clientManager = clientManager;
+        _controllerManager = controllerManager;
+    }
+
+    public void Start()
+    {
+        _cts = new CancellationTokenSource();
+        _renderTask = Task.Run(async () =>
+        {
+            while (!_cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    Render();
+                    await Task.Delay(500, _cts.Token);
+                }
+                catch (OperationCanceledException) { break; }
+            }
+        });
+    }
+
+    private void Render()
+    {
+        try
+        {
+            if (Console.IsOutputRedirected) return;
+            var width = Console.WindowWidth;
+            var height = Console.WindowHeight;
+            if (width < 60 || height < 12) return;
+
+            Console.SetCursorPosition(0, 0);
+
+            var pkt = Interlocked.CompareExchange(ref _totalPackets, 0, 0);
+            var byt = Interlocked.CompareExchange(ref _totalBytes, 0, 0);
+            var players = _clientManager.ConnectedCount;
+
+            Console.WriteLine($@"
+ ╔════════════════════════════════════════════════════════════════════╗
+ ║                    GAMEPAD SERVER — MULTIPLAYER                   ║
+ ║              Offline Virtual Gamepad via WiFi Hotspot             ║
+ ╠════════════════════════════════════════════════════════════════════╣
+ ║ Players: {players}/{Protocol.MaxPlayers}   │ Packets: {pkt,-10} │ Bytes: {byt,-12}  ║
+ ║ UDP: {Protocol.UdpPort}  │ Discovery: {Protocol.DiscoveryPort}  │ Timeout: {Protocol.DisconnectionTimeoutMs}ms            ║
+ ╠════════════════════════════════════════════════════════════════════╣");
+
+            for (int i = 0; i < Protocol.MaxPlayers; i++)
+            {
+                var client = _clientManager.GetClient(i);
+                if (client != null && client.IsConnected)
+                {
+                    var elapsed = (DateTime.UtcNow - client.LastSeen).TotalSeconds;
+                    var status = elapsed < 2 ? "●" : "○";
+                    var color = elapsed < 2 ? ConsoleColor.Green : ConsoleColor.DarkYellow;
+                    Console.ForegroundColor = color;
+                    Console.Write($" ║  Player {i + 1}: {status} {client.DeviceName,-20}");
+                    Console.ResetColor();
+                    Console.WriteLine($" last: {elapsed:F1}s ago      ║");
+                }
+                else
+                {
+                    Console.WriteLine($" ║  Player {i + 1}: —  Waiting for connection...                    ║");
+                }
+            }
+
+            Console.WriteLine(@" ╠════════════════════════════════════════════════════════════════════╣
+ ║  [Q] Quit  │  Use PC Hotspot (not phone hotspot!) for multiplayer  ║
+ ╚════════════════════════════════════════════════════════════════════╝");
+        }
+        catch { /* Console may be resizing */ }
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}
+
+--------------------------------------------------------------------------------
+8.12  D:\release\StartServer.bat  (launcher)
+--------------------------------------------------------------------------------
+@echo off
+title GamePad Server
+echo Starting GamePad Server...
+echo.
+echo NOTE: Requires Administrator rights (for WiFi hotspot + ViGEm driver).
+echo If you see a UAC prompt, click Yes.
+echo.
+cd /d "%~dp0"
+powershell -NoProfile -Command "Start-Process -FilePath '%~dp0GamePadServer.exe' -Verb RunAs"
+
+Explanation:
+  - Sets the working directory to wherever the .bat lives.
+  - Uses Start-Process -Verb RunAs to re-launch the exe elevated.
+  - The exe's own app.manifest already declares requireAdministrator, so the
+    UAC prompt is triggered either way.
+
+================================================================================
+9. HOW THE SERVER FUNCTIONS — STEP BY STEP
+================================================================================
+
+1. MAIN (Program.cs)
+   - Registers an AppDomain unhandled-exception hook that logs FATAL to server.log.
+   - Calls Run(), wrapped in try/catch that logs FATAL and rethrows.
+
+2. RUN()
+   a. Sets UTF-8 console encoding, prints the ASCII banner.
+   b. Creates the five subsystems:
+        ClientManager          — slot table
+        ControllerManager      — ViGEmBus virtual pads (constructor connects
+                                 to the driver and prints
+                                 "[ViGEm] ViGEmClient initialized")
+        DiscoveryService       — UDP 9878
+        InputListener          — UDP 9876
+        ServerHud              — dashboard renderer
+   c. Creates HotspotManager and calls Start().
+      This blocks until the hotspot is up (or all strategies fail).
+   d. Wires events: discovery → console log; input → HUD stats.
+   e. Starts the async services (Discovery, Input, HUD).
+   f. Prints the READY banner with SSID, password, server IP, ports.
+   g. Spawns a watchdog task: every 1 second it
+        - marks clients stale after 2 s of no packets (ClientManager)
+        - zeroes + destroys timed-out virtual controllers (ControllerManager)
+   h. Enters the main loop: waits for [Q] on the console (polling every 50 ms),
+      tolerating environments with no attached console.
+   i. On quit: cancels watchdog, disposes HUD, Input, Discovery, Hotspot,
+      ControllerManager, resets ClientManager, logs "Server stopped cleanly."
+
+3. THREADING MODEL
+   - The main thread: startup, banner, main [Q] loop.
+   - InputListener task: receives UDP packets continuously (fire-and-forget per
+     packet processing; per-slot locks make ViGEm calls safe).
+   - Discovery listener task + discovery broadcaster task.
+   - HUD render task (every 500 ms).
+   - Hotspot keep-alive task (every 30 s).
+   - Watchdog task (every 1 s).
+   All of these are cancelled via CancellationTokenSource on shutdown.
+
+================================================================================
+10. HOW THE WIFI HOTSPOT IS STARTED (HotspotManager.Start())
+================================================================================
+
+Order of operations:
+  1. EnsureWifiAdapterEnabled() — if no Wi-Fi/wireless adapter is Up, tries to
+     enable one via Get-NetAdapter | Enable-NetAdapter, waits 3 s.
+  2. LoopbackAdapter.EnsureCreated() — guarantees an always-connected virtual
+     NIC exists (see section 11 notes), so the hotspot works with zero internet.
+  3. STRATEGY 1 (TryTetheringApi) — Windows native Mobile Hotspot via
+     NetworkOperatorTetheringManager (the exact API Windows Settings uses).
+       - Writes a PowerShell script to %TEMP%\gamepad_tether.ps1.
+       - Runs it elevated, reads output asynchronously (the script loops forever
+         to hold the hotspot open).
+       - Script picks the best connection profile:
+             P1 active internet profile
+             P2 first connected profile
+             P3 the "GamePad Loopback" adapter profile (offline trick)
+             P4 first available profile
+       - Sets SSID "GamePad_Server" + passphrase "gamepad123" via
+         NetworkOperatorTetheringSessionAccessPointConfiguration and calls
+         StartTetheringAsync(config); falls back to plain StartTetheringAsync().
+       - Prints HOTSPOT_ACTIVE on success; calls
+         DisableNoConnectionsTimeoutAsync() so Windows never kills it for being
+         idle; then loops forever with Start-Sleep 5.
+       - C# waits up to 45 s for HOTSPOT_ACTIVE or ERROR, then waits up to
+         20 s for the hotspot adapter (Local Area Connection* 2 / Wi-Fi Direct)
+         to appear with an IPv4, assigning 192.168.137.1/24 if missing.
+       - On success: disables auto-shutdown, starts the keep-alive watchdog.
+  4. STRATEGY 2 (TryHostedNetwork) — legacy netsh hostednetwork if the Wi-Fi
+     driver reports "Hosted network supported: Yes".
+  5. STRATEGY 3 (EnableMobileHotspot) — ICS registry path: sets ScopeAddress /
+     ScopeAddressPool under SharedAccess, ensures the SharedAccess service runs.
+  6. FALLBACK (UseExistingLan) — if no hotspot can be made, binds to the best
+     LAN IP so the server still works on an existing network.
+
+KEEP-ALIVE watchdog:
+  - Every 30 s checks IsHotspotStillUp() (looks for a Wi-Fi Direct / Mobile
+    Hotspot / "Local Area Connection*" interface). If it vanished, retries the
+    strategies in order and re-applies DisableAutoShutdown().
+  - PeerlessTimeoutEnabled=0 is written to the registry so the hotspot doesn't
+    auto-stop after ~5 minutes with zero connected devices.
+
+================================================================================
+11. THE LOOPBACK ADAPTER (offline hotspot trick)
+================================================================================
+
+Problem: Windows refuses to start a Mobile Hotspot unless it has a "valid"
+connection profile to share, and it rejects saved-but-disconnected Wi-Fi
+networks. So on a PC with no internet, the hotspot cannot normally start.
+
+Solution: A Microsoft KM-TEST Loopback Adapter is a virtual NIC that is ALWAYS
+connected. GamePadServer creates one root-enumerated from the inbox
+"netloop.inf" driver via the SetupAPI P/Invoke sequence:
+  SetupDiCreateDeviceInfoList → SetupDiCreateDeviceInfoW (ROOT\NET\NNNN)
+  → SPDRP_HARDWAREID = "ROOT\NET\NNNN" + "*msloop"
+  → DIF_REGISTERDEVICE → build compat-driver list → pick "Loopback" driver
+  → DIF_SELECTDEVICE → DIF_INSTALLDEVICE (quiet, no UI)
+It then names it "GamePad Loopback" and assigns 10.99.0.1/24. The tethering
+script then shares that always-connected profile, so the hotspot starts with
+ZERO physical connections. Phones still reach the server on 192.168.137.1.
+
+IMPORTANT FIX in v1.1.0: FindExisting() previously matched ANY adapter whose
+description contained "Loopback" — which includes "Loopback Pseudo-Interface 1"
+(the built-in 127.0.0.1 IPv6 pseudo interface). It would try to rename and
+reconfigure the WRONG device. It now matches only "Microsoft KM-TEST Loopback
+Adapter".
+
+================================================================================
+12. THE ViGEmBus VIRTUAL CONTROLLER MAPPING
+================================================================================
+
+ControllerManager holds up to 8 slots, each with its own lock. When a slot's
+first input packet arrives, a virtual Xbox 360 controller is created via
+Nefarius.ViGEm.Client (CreateXbox360Controller → Connect). Each packet then:
+
+  Digital buttons (bitmask → SetButtonState):
+    A,B,X,Y            → Xbox360Button.A/B/X/Y
+    LeftBumper         → LeftShoulder
+    RightBumper        → RightShoulder
+    Back/Start         → Back/Start
+    LeftStick/RightStick→ LeftThumb/RightThumb
+    DPadUp/Down/Left/Right → Up/Down/Left/Right
+    Guide              → Guide
+
+  Analog axes (int16 → SetAxisValue, full -32768..32767 range):
+    LeftX/LeftY/RightX/RightY → LeftThumbX/Y, RightThumbX/Y
+
+  Analog triggers (0..255 → SetSliderValue):
+    LeftTrigger/RightTrigger → LeftTrigger/RightTrigger
+
+Timeout handling: every second, CheckDisconnections() finds slots with no input
+for > 2 s and calls ZeroController() (all buttons off, axes 0, triggers 0)
+then DestroyController() (Disconnect + release). This prevents "ghost inputs"
+or stuck sticks when a phone drops out mid-game.
+
+================================================================================
+13. COMPLETE BUG / FAILURE ANALYSIS (why old versions failed)
+================================================================================
+
+BUG A — Hotspot could never start (the critical one).
+  Symptom: server printed
+     "ERROR:The term '//' is not recognized as the name of a cmdlet..."
+     "Tethering API failed" → "Driver does NOT support hosted network"
+     → ICS silent fail → fell back to LAN-only (no hotspot for phones).
+  Root cause: inside the embedded PowerShell script string (BuildTetheringScript)
+  the line "// Find the best connection profile" used C# comment syntax "//".
+  PowerShell only treats "#" as a comment, so the whole script aborted at that
+  line with a parse error. Every hotspot strategy then failed.
+  Evidence: `Select-String` found the bad "//" line in the old source; the
+  broken script aborted immediately.
+  Fix: changed "// Find the best connection profile" to
+       "# Find the best connection profile".
+  Result: the native tethering API now runs; test run shows
+     "Using active connection: FS_4F_01"
+     "Config start result: Success"
+     "Final state: On"
+     "HOTSPOT_ACTIVE"
+
+BUG B — Discovery self-broadcast infinite loop (log flooding).
+  Symptom: server.log grew to 40 MB in minutes with endless lines:
+     "[Discovery] New device on network: Android Device @ 192.168.137.1:9878"
+     (i.e. the server was "discovering" itself.)
+  Root cause: DiscoveryService bound one UDP socket on port 9878 and ALSO used
+  it to broadcast its own identity. Broadcasts loop back to the sender's own
+  socket, so the server received its own packets, treated them as new phones,
+  responded to itself → its responses looped back again → infinite loop.
+  Fix (three guards in ProcessPacket):
+     Guard 1: drop packets whose source address is one of our own local IPs,
+              is 255.255.255.255, or all-255 broadcast.
+     Guard 2: drop packets that begin with our own "GPAD_SERVER_V1" identity.
+     Guard 3: per-endpoint dedupe (10 s window) so even a real device that
+              re-broadcasts doesn't spam the log.
+  Result: a 15 s test produced a 2,800-byte log with NO self-spam; the earlier
+  40 MB flood is impossible.
+
+BUG C — Loopback adapter mis-detection.
+  Symptom: log claimed
+     "Loopback adapter already present: 'Loopback Pseudo-Interface 1'"
+     "Loopback adapter configured: GamePad Loopback = 10.99.0.1/...".
+     That is the built-in 127.0.0.1 pseudo interface, NOT a KM-TEST adapter.
+  Root cause: FindExisting() matched substring "Loopback".
+  Fix: match the exact description "Microsoft KM-TEST Loopback Adapter".
+
+BUG D — Unbounded log file.
+  Root cause: FileLog appended forever.
+  Fix: when server.log exceeds 1 MB, it is copied to server.log.old and a fresh
+  log begins.
+
+================================================================================
+14. THE FIXES APPLIED IN v1.1.0 (what changed and why)
+================================================================================
+
+  File                           Change
+  -----------------------------  -------------------------------------------------
+  Network/HotspotManager.cs      "// Find the best connection profile" → "# ..."
+                                 (only bug that blocked the hotspot entirely)
+  Network/LoopbackAdapter.cs     FindExisting() matches only
+                                 "Microsoft KM-TEST Loopback Adapter"
+  Network/DiscoveryService.cs    Full rewrite of ProcessPacket with 3 self-guards
+                                 + per-endpoint dedupe (fixed 40 MB log flood)
+  Program.cs                     FileLog: 1 MB cap + rotate to server.log.old
+  GamePadServer.csproj           Version 1.0.0 → 1.1.0
+  .github/workflows/release.yml  Slim framework-dependent build + build APK in
+                                 CI + attach both assets to the release
+  client/app/build.gradle.kts    versionName/versionCode → 1.1.0/2, release
+                                 buildType signs with debug key (installable)
+  README.md                      Updated quick-start (PC-hosted hotspot, offline
+                                 support), v1.1.0 changelog, slim build docs
+
+================================================================================
+15. VERIFICATION & TESTING RESULTS (evidence)
+================================================================================
+
+Test A — non-admin smoke test of the fixed build (D:\release\testbin):
+  - Server ran 15 s without crashing; ViGEm connected.
+  - Hotspot fell back to UseExistingLan (expected without admin).
+  - server.log = 1,398 bytes after test → NO discovery spam (BUG B confirmed
+    fixed even before the hotspot fix).
+
+Test B — full admin run (user ran D:\release\StartServer.bat):
+  server.log excerpt (09:05–09:07):
+    09:05:49 [Boot] Starting GamePad Server v1.0...
+    09:05:49 [Boot] Initializing ViGEmBus driver interface...
+    09:05:53 [Boot] Server is READY
+    09:05:53 [Boot] HOTSPOT is running — connect phones to GamePad_Server WiFi:
+    09:05:53 [Boot]   Server:   192.168.137.1:9876
+    09:06:32 [Discovery] New device on network: Android Device @ 192.168.137.15:43648
+    09:07:15 [Boot] Starting GamePad Server v1.0... (second launch OK)
+  - REAL PHONE CONNECTED: 192.168.137.15 appeared in Discovery.
+  - Log stayed ~2.9 KB (no 40 MB flood).
+  - ViGEmBus service verified RUNNING (sc query ViGEmBus → STATE: 4 RUNNING).
+  - Hotspot adapter "Local Area Connection* 2" = 192.168.137.1 verified Up.
+
+Test C — release build verification:
+  - dotnet publish -c Release: 0 warnings, 0 errors.
+  - Slim output ~517 KB total (was 65 MB self-contained).
+  - GitHub v1.1.0 release created with both assets; repo push succeeded
+    (12481da..15496b4 main -> main).
+
+================================================================================
+16. LOGGING SYSTEM (server.log, 1MB rotation)
+================================================================================
+
+  - Every Log() call writes both to the console and to server.log in the
+    executable directory (AppContext.BaseDirectory).
+  - Format: "yyyy-MM-dd HH:mm:ss.fff [Tag] message".
+  - Tags seen: Boot, Hotspot, Loopback, Discovery, Input, ViGEm, Shutdown, FATAL.
+  - Rotation: if server.log > 1,048,576 bytes → copy to server.log.old, start
+    fresh file. Bounded disk usage guaranteed.
+  - FileLog is exception-swallowing and lock-protected (thread-safe).
+
+================================================================================
+17. SECURITY & PRIVILEGE MODEL
+================================================================================
+
+  - The exe is marked requireAdministrator in app.manifest → every launch
+    triggers a UAC prompt. Admin is required for:
+        • Writing the tethering PowerShell script and running hotspot APIs
+        • Registry writes (PeerlessTimeoutEnabled, SharedAccess ICS values)
+        • SetupAPI device creation (KM-TEST loopback adapter)
+        • netsh interface configuration
+        • Opening the ViGEmBus virtual bus (kernel driver access)
+  - SSID/password are hard-coded defaults (GamePad_Server / gamepad123) for
+    convenience; the HotspotManager constructor accepts overrides.
+  - The wire protocol uses a fixed GPAD magic but NO encryption — appropriate
+    for a local gaming LAN, but anyone on the same network could send crafted
+    UDP packets. This is acceptable for the intended use case.
+  - No secrets are stored; nothing is sent to the internet; the 8.8.8.8 UDP
+    "route sniff" only determines the local address and never completes a real
+    connection (UDP connect() is connectionless and just picks a route).
+
+================================================================================
+18. THE ANDROID CLIENT SIDE (what talks to this server)
+================================================================================
+
+  Package      : com.gamepad.controller (GamePadController-v1.1.1.apk, 1 MB)
+  Protocol.kt  : mirrors the server exactly (UDP 9876, TCP 9877 reserved,
+                 Discovery 9878, magic 0x47504144, 34-byte InputPacket, same
+                 button flags).
+  UdpInputClient.kt: sends ~125 Hz input packets to the server's IP:9876
+                 (8 ms loop), heartbeat every 1200 ms.
+  DiscoveryClient.kt: broadcasts "GPAD_DISCOVER_V1" on 9878 and parses the
+                 "GPAD_SERVER_V1|<hostname>" reply to find the server.
+  Version      : 1.1.1 (versionCode 3), signed with the Android debug keystore,
+                 R8-minified. New in v1.1.1: on-screen layout editor (drag/
+                 resize/hide controls, persisted via commit()), L3/R3 stick-
+                 click buttons, faster 1200 ms heartbeat, corrected Quick Start
+                 text. See GamePadControllerDetails.txt in this folder.
+
+  Note: the wire protocol is FIXED and must not change - the released APK and
+  server were built from matching sources (verified by comparing Protocol.cs
+  and Protocol.kt: identical constants, layout, byte order).
+
+================================================================================
+19. GITHUB CI/CD PIPELINE (release.yml)
+================================================================================
+
+  Trigger: push of a tag matching v* (e.g. git tag v1.2.0 && git push --tags)
+
+  Job 1 — build-server (windows-latest):
+    actions/checkout → setup-dotnet 8.0.x → dotnet publish -c Release -o ./release
+    → Compress-Archive to GamePadServer-$TAG-win-x64.zip → upload artifact.
+
+  Job 2 — build-android (ubuntu-latest):
+    actions/checkout → setup-java 17 (Temurin) → android-actions/setup-android
+    → gradle/actions/setup-gradle → ./gradlew :app:assembleRelease --no-daemon
+    → cp to GamePadController-$TAG.apk → upload artifact.
+
+  Job 3 — release (ubuntu-latest):
+    needs [build-server, build-android] → download both artifacts →
+    softprops/action-gh-release v2 attaches GamePadServer-*.zip and
+    GamePadController-*.apk with auto-generated release notes.
+
+  Permissions: contents: write (so the workflow can create releases).
+
+  v1.1.1 CI fixes made on 2026-08-01 (both needed because the Android build
+  had never actually run in CI before):
+    - Fix 1 (commit 596ee1c): the Unix runner failed with
+      "./gradlew: No such file or directory" because the wrapper script was
+      committed with CRLF and missing from the git index; the workflow now
+      runs `chmod +x gradlew` before the build.
+    - Fix 2 (commit 5cf3d5e): marked gradlew executable in git via
+      `git update-index --chmod=+x client/gradlew` so fresh checkouts get it
+      directly; also stripped CRLF so the shebang resolves on Linux.
+    - Final v1.1.1 run 30694210361 = SUCCESS (build-server + build-android +
+      release all green; server zip 259,689 bytes, APK 1,069,624 bytes).
+
+================================================================================
+20. HOW TO BUILD FROM SOURCE
+================================================================================
+
+  Server (requires .NET 8 SDK):
+    cd server/src/GamePadServer
+    dotnet build -c Release            # compile + type-check
+    dotnet publish -c Release -o ./publish   # deployable slim build
+
+  Android APK (requires JDK 17 + Android SDK):
+    cd client
+    ./gradlew :app:assembleRelease     # output: app/build/outputs/apk/release/app-release.apk
+
+  CI does all of this automatically for every v* tag.
+
+================================================================================
+21. HOW TO DEPLOY & RUN
+================================================================================
+
+  1. Install ViGEmBus driver (github.com/nefarius/ViGEmBus/releases) if not
+     already installed. Verify it runs (Device Manager → Xbox 360 Peripherals,
+     or "sc query ViGEmBus").
+  2. Install .NET 8 Desktop Runtime (required for the slim build).
+  3. Extract GamePadServer-v1.1.1-win-x64.zip anywhere on the PC.
+  4. Double-click StartServer.bat (or GamePadServer.exe) and accept UAC.
+  5. The server prints the banner, starts the hotspot (auto or loopback-backed),
+     and shows "HOTSPOT ACTIVE: GamePad_Server".
+  6. On each Android phone: enable Wi-Fi, join "GamePad_Server" WiFi
+     (password gamepad123), install + open GamePadController-v1.1.1.apk.
+  7. The app auto-discovers the server (UDP 9878) and starts streaming to
+     UDP 9876. Press [Q] in the server console to quit.
+
+================================================================================
+22. KNOWN LIMITATIONS & FUTURE WORK
+================================================================================
+
+  - No encryption/auth on the UDP wire (fine for trusted LANs).
+  - Hard-coded SSID/password (overridable via HotspotManager constructor, not
+    yet exposed via CLI/config).
+  - Requires an admin UAC prompt every launch.
+  - Windows hotspot is single-network; the Wi-Fi adapter must be enabled.
+  - Loopback adapter creation needs admin + SetupAPI access; unsupported
+    editions of Windows may refuse it.
+  - Gyro fields are carried in the protocol but not currently applied to the
+    Xbox 360 mapping on the server (client sends them; a future release can map
+    them to right-stick or trigger input).
+  - Single-file/self-contained publish would remove the .NET runtime
+    dependency at the cost of a ~65 MB exe (option exists in the old workflow).
+  - Future: config file (SSID/password/port), controller vibration passthrough,
+    TLS or PSK auth, per-player remapping UI.
+
+================================================================================
+23. FILE MANIFEST (D:\release — the shipped folder)
+================================================================================
+
+  GamePadController-v1.1.1.apk  1,069,628  Android client (release, installed on phones)
+  GamePadServer.deps.json        1,097  .NET dependency manifest
+  GamePadServer.dll            73,216   Server assembly (the code)
+  GamePadServer.exe           152,064   App host / launcher executable
+  GamePadServer.runtimeconfig.json  458 Runtime config
+  Nefarius.ViGEm.Client.dll   290,304   ViGEm client library
+  server.log                    9,002   Runtime log (auto-generated)
+  StartServer.bat                 300   Elevated launcher
+  GamePadControllerDetails.txt       (client technical report, v1.1.1)
+  gamepadserverdetails.txt    (this report)
+
+  Related locations:
+    Working release  : D:\release
+    Source (server)  : D:\release\src\GamePadServer and
+                       D:\OpenCode Projects\Development\GamePadEcosystem\GamePadEcosystem\server\src\GamePadServer
+    Old versions     : D:\old_gamepad_backup
+    GitHub repo      : https://github.com/yaleedhaque/GamePadEcosystem
+    v1.1.1 release   : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
+
+================================================================================
+END OF REPORT
+================================================================================

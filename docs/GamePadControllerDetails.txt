@@ -1,0 +1,2902 @@
+================================================================================
+            GAMEPADCONTROLLER - COMPLETE TECHNICAL REPORT
+            Offline Multiplayer Virtual Gamepad (Android Client)
+            Version 1.1.1  |  Kotlin / Jetpack Compose  |  Built: 2026-08-01
+================================================================================
+
+TABLE OF CONTENTS
+  1.  Executive Summary
+  2.  What The App Does
+  3.  Release APK Details (file, size, hashes, signing)
+  4.  Environment & Build Toolchain
+  5.  How The APK Is Made (build pipeline, step by step)
+  6.  APK Internals (zip contents, dex, metadata)
+  7.  App Architecture (packages, classes, data flow)
+  8.  The Wire Protocol (bytes, ports, packet formats)
+  9.  Which Buttons Work (full control map + flag table)
+  10. Controller Layouts (default layout, editor, persistence)
+  11. Controller Profiles (genre-specific layouts)
+  12. Sensors & Motion Input (gyro / accelerometer)
+  13. Discovery & Connection Flow (how it finds the server)
+  14. UI & Screens (Connection screen, GamePad screen, components)
+  15. Permissions & Manifest (what each permission is for)
+  16. Complete Source Code - Every File, Verbatim
+       16.1  AndroidManifest.xml
+       16.2  build.gradle.kts
+       16.3  settings.gradle.kts
+       16.4  res/xml/network_security_config.xml
+       16.5  GamePadApplication.kt
+       16.6  MainActivity.kt
+       16.7  network/Protocol.kt
+       16.8  network/UdpInputClient.kt
+       16.9  network/DiscoveryClient.kt
+       16.10 network/NetworkBinder.kt
+       16.11 sensors/SensorInputManager.kt
+       16.12 layout/ButtonLayout.kt
+       16.13 profiles/ControllerProfile.kt
+       16.14 ui/screens/GamePadScreen.kt
+       16.15 ui/screens/ConnectionScreen.kt
+       16.16 ui/components/Components.kt
+  17. Bug / Failure Analysis (v1.1.0 -> v1.1.1 changes)
+  18. How To Build From Source
+  19. How To Install & Use
+  20. Known Limitations & Future Work
+  21. GitHub CI/CD Integration
+  22. Related Files & Locations
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+GamePadController is the Android side of the GamePadEcosystem. It turns an
+Android phone into a wireless Xbox 360 controller for a Windows PC by sending
+raw UDP packets to GamePadServer.exe (which maps them onto a ViGEmBus virtual
+controller). No cloud, no accounts, no cables, sub-5ms latency.
+
+  - Single-activity Jetpack Compose app, landscape-locked, fullscreen.
+  - Sends 34-byte binary input packets over UDP port 9876 at ~125 Hz.
+  - Auto-discovers the server over UDP 9878 (broadcast + direct probes).
+  - Full 15-button Xbox 360 mapping: face, D-pad, bumpers, triggers, sticks,
+    L3/R3, Back/Start/Guide.
+  - Built-in layout EDITOR: drag, resize, hide/show and persist any control.
+  - 5 genre profiles (Xbox / Retro / FPS / Race / Custom).
+  - Gyro + accelerometer motion input for FPS aiming and racing steering.
+  - Released as v1.1.1 (versionCode 3), R8-minified, ~1 MB APK.
+
+This report documents v1.1.1 - the current released binary. It covers how the
+APK is built, every source file verbatim, the exact wire protocol, the button
+mapping, and the analysis of what changed between v1.1.0 and v1.1.1.
+
+================================================================================
+2. WHAT THE APP DOES
+================================================================================
+
+  - Discovers a GamePadServer on the local network (broadcast + known
+    gateways: 192.168.137.1, 192.168.43.1, 192.168.58.1, 192.168.1.1,
+    192.168.0.1, 10.0.0.1).
+  - Connects over UDP 9876 (connectionless - "connected" fires immediately).
+  - Streams state at ~125 Hz (8 ms loop): buttons, 2 analog sticks, 2 analog
+    triggers, plus gyro rates when the active profile has motion enabled.
+  - Sends a heartbeat packet every 1200 ms to keep the server's 2000 ms
+    disconnect timeout from firing.
+  - Binds its sockets to the WiFi/hotspot network so traffic never leaks over
+    mobile data.
+  - Keeps the CPU awake (partial wake lock) and the screen on during play.
+  - Lets the user edit every on-screen control: move, resize, hide/show, save.
+  - Cycles 5 controller profiles tailored to game genres.
+
+================================================================================
+3. RELEASE APK DETAILS
+================================================================================
+
+File                        Size (bytes)  Purpose
+--------------------------  ------------  ------------------------------------
+GamePadController-v1.1.1.apk   1,069,628  Android app package (the release APK)
+
+  Package name  : com.gamepad.controller
+  versionName   : 1.1.1
+  versionCode   : 3
+  minSdk        : 26 (Android 8.0)
+  targetSdk     : 35 (Android 15)
+  compileSdk    : 35, codename "15"
+  Landscape-locked, launchMode singleTask, keepScreenOn.
+
+  SHA-256 hashes (both legitimate v1.1.1 builds differ slightly because they
+  are produced on different machines - local Windows vs GitHub Ubuntu):
+    Local build (D:\release\GamePadController-v1.1.1.apk):
+        C700D273460118E68DB9FDB5FD11D3811754DA839C135C9C215B900B75E9ECB5
+    CI build (released on GitHub, tag v1.1.1):
+        B2155D3E1E4FC178D32AFF0762EE2388D41992B1CCA03466FF4B37EFE2257D4B
+
+  Signing certificate (APK is signed with the ANDROID DEBUG keystore - the
+  build uses signingConfig = debug because the project has no release key):
+    Subject   : C=US, O=Android, CN=Android Debug
+    SHA-256   : cefee9ee051f35f23d730a089db49896bfe40e8a042490dbfd9f1ed2e928be39
+    SHA-1     : f24531774756f675b441ebc3fbc242c11d6091d0
+    MD5       : 4963cf18a2aed4841fe78855fe562f49
+    V2 signing scheme only.
+
+  Public release: https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
+  Asset:          GamePadController-v1.1.1.apk (1,069,624 bytes on GitHub)
+
+  NOTE: the debug-signed APK installs fine (sideload). A production release
+  should switch to a real keystore (see section 20).
+
+================================================================================
+4. ENVIRONMENT & BUILD TOOLCHAIN
+================================================================================
+
+  OS (local build)       : Windows (win32), PowerShell 5.1
+  CI (release build)     : GitHub Actions, ubuntu-latest
+  JDK                    : 17 (Microsoft OpenJDK 17.0.19 locally / Temurin 17 CI)
+  Android SDK            : API 35, build-tools 34.0.0
+  Gradle                 : 8.11.1 (wrapper)
+  Android Gradle Plugin  : 8.7.0
+  Kotlin                 : 2.1.0 (org.jetbrains.kotlin.plugin.compose applied)
+  Compose BOM            : 2024.12.01
+  Kotlin coroutines      : 1.9.0
+  androidx core-ktx      : 1.15.0
+  androidx lifecycle-rtx : 2.8.7
+  androidx activity-compose: 1.9.3
+  Source/target compat   : 17
+  Repositories           : google() + mavenCentral() (FAIL_ON_PROJECT_REPOS)
+  R8                    : enabled for release (minify + shrink resources)
+  Lint on release       : disabled (checkReleaseBuilds=false, abortOnError=false)
+
+  Verified from the APK metadata itself:
+    app-metadata.properties   -> androidGradlePluginVersion=8.7.0
+    kotlin-tooling-metadata.json -> Gradle 8.11.1, Kotlin 2.1.0, JVM target 17
+    version-control-info.textproto -> NO_SUPPORTED_VCS_FOUND (no git root on
+                                      the CI runner at build time)
+
+================================================================================
+5. HOW THE APK IS MADE (build pipeline)
+================================================================================
+
+  Step 1 - Wrapper
+    client/gradlew (Unix) and client/gradlew.bat (Windows) bootstrap Gradle
+    8.11.1 from the distribution URL pinned in gradle/wrapper/
+    gradle-wrapper.properties (plus gradle-wrapper.jar). Both scripts are
+    committed (v1.1.1 fix - see section 17).
+
+  Step 2 - Compile
+    JDK 17 compiles the Kotlin sources in
+    client/app/src/main/java/com/gamepad/controller/ with AGP 8.7.0 and the
+    Compose Kotlin compiler plugin. All 12 .kt files + resources + manifest
+    are packaged.
+
+  Step 3 - Release optimizations
+    R8 runs with proguard-android-optimize.txt + proguard-rules.pro:
+      - minifyEnabled = true  (dead code stripped, names obfuscated)
+      - isShrinkResources = true  (unused resources removed)
+    The single classes.dex ends up at 1,781,124 bytes.
+
+  Step 4 - Signing
+    signingConfig = debug keystore (C:\Users\yaleed\.android\debug.keystore).
+    APK signed with the V2 scheme only.
+
+  Step 5 - Output
+    client/app/build/outputs/apk/release/app-release.apk (~1 MB).
+    On CI the workflow renames it to GamePadController-<tag>.apk and uploads it
+    as an artifact; the release job attaches it to the GitHub release.
+
+  The CI job is ./gradlew :app:assembleRelease --no-daemon (ubuntu runner,
+  Temurin 17 via setup-java, Android SDK via android-actions/setup-android,
+  Gradle setup via gradle/actions/setup-gradle v4).
+
+================================================================================
+6. APK INTERNALS (zip contents)
+================================================================================
+
+  The release APK is a zip. Notable entries (bytes):
+
+    classes.dex                                        1,781,124  (all app code)
+    lib/arm64-v8a/libandroidx.graphics.path.so           10,096
+    lib/armeabi-v7a/libandroidx.graphics.path.so         7,252
+    lib/x86/libandroidx.graphics.path.so                 9,284
+    lib/x86_64/libandroidx.graphics.path.so             10,760
+    assets/dexopt/baseline.prof                          3,675   (baseline profile)
+    assets/dexopt/baseline.profm                           463
+    resources.arsc                                       87,820   (compiled resources)
+    AndroidManifest.xml                                   6,724   (binary manifest)
+    kotlin-tooling-metadata.json                            626   (build info)
+    META-INF/com/android/build/gradle/app-metadata.properties  56 (AGP version)
+    DebugProbesKt.bin                                     1,728   (coroutines debug probes)
+    kotlin/*.kotlin_builtins                         (embedded Kotlin stdlib metadata)
+    META-INF/androidx.*.version                      (Compose/androidx module list)
+    META-INF/kotlinx_coroutines_*.version                  (coroutines modules)
+
+  The 4 .so files are the Compose Graphics path library (only native code;
+  the app itself is 100% Kotlin/JVM). Everything else is DEX + resources.
+  R8-obfuscated class names (e.g. p0.k0, j1.a) confirm minification ran.
+
+  R8-keeper: the dex retains the app entry points
+    com.gamepad.controller.MainActivity
+    com.gamepad.controller.GamePadApplication
+
+  Permissions requested (from binary manifest):
+    INTERNET, ACCESS_NETWORK_STATE, ACCESS_WIFI_STATE,
+    CHANGE_WIFI_MULTICAST_STATE, HIGH_SAMPLING_RATE_SENSORS, VIBRATE, WAKE_LOCK
+
+================================================================================
+7. APP ARCHITECTURE (packages, classes, data flow)
+================================================================================
+
+  Package root: com.gamepad.controller (client/app/src/main/java/...)
+
+  com.gamepad.controller
+    MainActivity.kt          - single Activity, owns all state and IO objects
+    GamePadApplication.kt    - Application class, partial wake lock
+
+  com.gamepad.controller.network
+    Protocol.kt              - protocol constants + 34-byte InputPacket
+    UdpInputClient.kt        - UDP socket, send input, response listener
+    DiscoveryClient.kt       - server discovery (direct probes + broadcast)
+    NetworkBinder.kt         - binds sockets to the WiFi/hotspot network
+
+  com.gamepad.controller.sensors
+    SensorInputManager.kt    - gyro + accelerometer sampling
+
+  com.gamepad.controller.layout
+    ButtonLayout.kt          - control model, default layout, LayoutManager
+
+  com.gamepad.controller.profiles
+    ControllerProfile.kt     - 5 genre profiles
+
+  com.gamepad.controller.ui.screens
+    GamePadScreen.kt         - the gamepad itself + layout editor
+    ConnectionScreen.kt      - connect/disconnect/discovery UI
+
+  com.gamepad.controller.ui.components
+    Components.kt            - Haptics, TouchButton, AnalogStick, DPad,
+                               TriggerSlider
+
+  Data flow (runtime):
+    User touches control
+      -> EditableStick/EditableButton/EditableTrigger update Compose state
+         (buttons UInt bitmask, leftX/Y, rightX/Y, leftTrigger, rightTrigger)
+      -> LaunchedEffect send loop (every 8 ms) builds an InputPacket and calls
+         onPacketReady
+      -> MainActivity.sendInputPacket injects gyro deltas when the profile has
+         showMotion, then UdpInputClient.sendInput() serializes and sends over
+         UDP 9876
+      -> A background thread "UDP-Response-Listener" receives the server's
+         0xAA assignment packet and reports the player slot + server name.
+
+  Reverse flow (server -> phone):
+    Server broadcasts GPAD_SERVER_V1|<hostname> on 9878 and replies to probes.
+    DiscoveryClient.listenForServer matches the magic, calls onServerFound,
+    MainActivity.connectToServer() starts UDP, sensors and the heartbeat loop.
+
+================================================================================
+8. THE WIRE PROTOCOL (bytes, ports, packet formats)
+================================================================================
+
+  MUST stay byte-identical with the server's Core/Protocol.cs (shared contract
+  documented in shared/protocol/PROTOCOL.md). Protocol.kt mirrors it exactly.
+
+  Ports:
+    UDP 9876  input          - client -> server (34-byte packets)
+    TCP 9877  reserved       - declared but UNUSED on both sides
+    UDP 9878  discovery      - GPAD_DISCOVER_V1 / GPAD_SERVER_V1
+
+  Constants (Protocol.kt):
+    MAX_PLAYERS                 = 8
+    DISCONNECTION_TIMEOUT_MS    = 2000
+    PACKET_MAGIC                = 0x47504144  ("GPAD" as ASCII)
+
+  Packet types:
+    0x01 INPUT, 0x02 HEARTBEAT, 0x03 GYRO (declared, unused as a separate
+    packet - gyro rides inside INPUT), 0x04 CONFIG
+
+  InputPacket layout (34 bytes, little-endian):
+    Offset  Size  Field
+    ------  ----  -----------------------------
+    0       4     Magic int32 = 0x47504144
+    4       1     PacketType (1 = input, 2 = heartbeat)
+    5       1     DeviceId (server-assigned slot; client always sends 0)
+    6       2     Sequence uint16 (atomic counter masked to 16 bits)
+    8       4     Buttons uint32 bitmask (see table in section 9)
+    12      2     LeftX int16 (raw -32768..32767)
+    14      2     LeftY int16
+    16      2     RightX int16
+    18      2     RightY int16
+    20      1     LeftTrigger byte (0..255)
+    21      1     RightTrigger byte (0..255)
+    22      4     GyroX float32 rad/s
+    26      4     GyroY float32 rad/s
+    30      4     GyroZ float32 rad/s
+
+  Assignment (server -> client, on first contact):
+    Byte 0    = 0xAA  (magic)
+    Byte 1    = player slot 0..7
+    Byte 2..  = UTF-8 server hostname
+
+  Heartbeat:
+    A HEARTBEAT packet (type 0x02) is sent every 1200 ms. The server zeroes
+    the controller if no packet arrives for 2000 ms (anti-drift), so 1200 ms
+    leaves a safety margin.
+
+================================================================================
+9. WHICH BUTTONS WORK (full control map + flag table)
+================================================================================
+
+  Every Xbox 360 control is mapped. The Buttons uint32 is a bitmask; each
+  control ORs in its flag when pressed and clears it on release.
+
+    Flag (hex)  Bit   Constant       Control            Default label
+    ----------  ----  -------------  -----------------  -------------
+    0x00000001  A     A              Face button A      A   (green)
+    0x00000002  B     B              Face button B      B   (red)
+    0x00000004  X     X              Face button X      X   (blue)
+    0x00000008  Y     Y              Face button Y      Y   (yellow)
+    0x00000010  LB    LEFT_BUMPER    Left bumper        LB
+    0x00000020  RB    RIGHT_BUMPER   Right bumper       RB
+    0x00000040  Back  BACK           Back button        BACK
+    0x00000080  Start START          Start button       START
+    0x00000100  L3    LEFT_STICK     Left stick press   L3
+    0x00000200  R3    RIGHT_STICK    Right stick press  R3
+    0x00000400  DUp   DPAD_UP        D-pad up           up arrow
+    0x00000800  DDown DPAD_DOWN      D-pad down         down arrow
+    0x00001000  DLeft DPAD_LEFT      D-pad left         left arrow
+    0x00002000  DRight DPAD_RIGHT    D-pad right        right arrow
+    0x00004000  Guide GUIDE          Guide button       GUIDE
+
+  Analog controls (not part of the bitmask, sent as int16/byte):
+    Left stick   X/Y  -> -32768..32767 (from -1..1 fraction * 32767)
+    Right stick  X/Y  -> -32768..32767
+    LT / RT           -> 0..255 (from 0..1 fraction * 255)
+
+  Dead zone on sticks: 0.08 (drag distance below 8% of radius reads 0).
+
+  How input is collected:
+    - Face/D-pad/bumper/stick-click/center buttons use a press/release gesture
+      (awaitFirstDown -> onButtonChanged(true) -> waitForUpOrCancellation ->
+      onButtonChanged(false)). During press a spring animation scales the
+      control to 0.85 and a haptic tick fires.
+    - Sticks use detectDragGestures; offset is clamped to the stick radius and
+      normalized. On release the stick returns to center and sends 0.
+    - Triggers are horizontal drag sliders (value 0..1 based on drag x).
+
+================================================================================
+10. CONTROLLER LAYOUTS (default layout, editor, persistence)
+================================================================================
+
+  Model: ButtonLayout(id, type, x, y, sizeDp, label, color, visible,
+  buttonFlag). x/y are screen fractions (0..1); size is in dp.
+
+  19 element types:
+    STICK_LEFT, STICK_RIGHT, STICK_CLICK_L, STICK_CLICK_R,
+    FACE_A, FACE_B, FACE_X, FACE_Y,
+    DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT,
+    BUMPER_L, BUMPER_R, TRIGGER_L, TRIGGER_R,
+    CENTER_BACK, CENTER_GUIDE, CENTER_START
+
+  Default layout "Xbox" - 17 controls (all positions in screen fractions):
+    lstick       STICK_LEFT      (0.18, 0.45)  140 dp   left thumb zone
+    rstick       STICK_RIGHT     (0.82, 0.72)  140 dp   right thumb zone
+    face_a       FACE_A          (0.80, 0.36)   52 dp   green
+    face_b       FACE_B          (0.88, 0.28)   52 dp   red
+    face_x       FACE_X          (0.72, 0.28)   52 dp   blue
+    face_y       FACE_Y          (0.80, 0.20)   52 dp   yellow
+    dpad_up      DPAD_UP         (0.18, 0.68)   44 dp
+    dpad_down    DPAD_DOWN       (0.18, 0.88)   44 dp
+    dpad_left    DPAD_LEFT       (0.10, 0.78)   44 dp
+    dpad_right   DPAD_RIGHT      (0.26, 0.78)   44 dp
+    bumper_l     BUMPER_L        (0.06, 0.08)   56 dp   LB top-left
+    bumper_r     BUMPER_R        (0.94, 0.08)   56 dp   RB top-right
+    trigger_l    TRIGGER_L       (0.17, 0.09)   40 dp   LT
+    trigger_r    TRIGGER_R       (0.83, 0.09)   40 dp   RT
+    stick_click_l STICK_CLICK_L  (0.06, 0.45)   36 dp   L3
+    stick_click_r STICK_CLICK_R  (0.94, 0.72)   36 dp   R3
+    center_back  CENTER_BACK     (0.40, 0.10)   30 dp   BACK
+    center_guide CENTER_GUIDE    (0.50, 0.10)   34 dp   GUIDE
+    center_start CENTER_START    (0.60, 0.10)   30 dp   START
+
+  (17 controls: 2 sticks + 2 stick-click + 4 face + 4 dpad + 2 bumpers +
+   2 triggers + 3 center.)
+
+  Layout EDITOR (new in v1.1.1):
+    - Opened via the bottom-right FAB (edit/pencil icon, turns cyan when on).
+    - Tap any control to select it (2 dp cyan border).
+    - Drag to move (drag deltas normalized by screen pixels, clamped 0.02..0.98).
+    - Collapsible cyan (#00E5FF) toolbar: size slider 24..160 dp, visible
+      switch, Reset, Save & Exit, Cancel.
+    - Reset restores defaultXboxLayout().
+    - Save persists via LayoutManager.saveCurrent().
+
+  Persistence (LayoutManager):
+    - SharedPreferences "gamepad_layouts".
+    - Keys: current_layout (active layout name) + custom_<name> (JSON blob).
+    - Uses commit() (synchronous) NOT apply() - prevents data loss when the
+      process is killed.
+    - JSON serialization via org.json (no third-party library).
+    - ensureStickClicks(): migration for layouts saved before v1.1.1 - if the
+      saved layout lacks L3/R3 it injects them from defaults, preserving all
+      user positions.
+
+================================================================================
+11. CONTROLLER PROFILES (genre-specific layouts)
+================================================================================
+
+  ControllerProfile is an enum; each value toggles which element groups show
+  and whether motion (gyro) input is injected. isVisibleIn() in ButtonLayout
+  filters controls accordingly.
+
+    Name        Show  Show   Show  Show  Show   Show  Show
+    (display)   sticks face  trigs bump  center dpad  motion  Description
+    --------    ------ ----- ----- ----- ------ ----- ------  --------------------------
+    XBOX (Xbox)  yes    yes   yes   yes   yes    yes   no    Full Xbox 360 layout
+    RETRO (Retro) no    yes   no    no    yes    yes   no    D-Pad + face buttons only
+    FPS   (FPS)  yes    yes   yes   yes   yes    no    yes   Right stick + gyro aiming
+    RACE  (Race) yes    yes   yes   yes   no     no    yes   Triggers + motion steering
+    CUSTOM (Custom) yes yes  yes   yes   yes    yes   yes   Everything enabled
+
+  Profile cycling: next() wraps through entries. UI: 5 selectable pills on the
+  Connection screen.
+
+================================================================================
+12. SENSORS & MOTION INPUT (gyro / accelerometer)
+================================================================================
+
+  SensorInputManager registers TYPE_GYROSCOPE and TYPE_ACCELEROMETER at
+  SENSOR_DELAY_GAME (~20-50 ms).
+
+  - getGyroDelta(): raw angular velocity (rad/s) * sensitivity (default 1.0),
+    dead zone 0.02, returned as (x, y, z). Injected into the INPUT packet's
+    gyro floats whenever the profile has showMotion and sensors are running.
+  - getMotionAxis(): accelerometer tilt -> -1..1 (PITCH->Y, ROLL->X).
+    DEAD CODE - written but never called from the UI/send path.
+  - sensitivity: default 1.0, no UI to change it yet.
+
+  HIGH_SAMPLING_RATE_SENSORS permission is declared but not actively used
+  (registration uses SENSOR_DELAY_GAME, which is below the 200 Hz threshold
+  that would require the permission).
+
+  Note: the server currently carries the gyro fields but does not map them to
+  the Xbox 360 axis output (documented as future work in the server report).
+  Motion therefore streams end-to-end and is ready for server-side mapping.
+
+================================================================================
+13. DISCOVERY & CONNECTION FLOW (how it finds the server)
+================================================================================
+
+  DiscoveryClient (launched automatically on app start and via "Scan Again"):
+
+    Phase 1 - Direct IP probes:
+      Payload = "GPAD_DISCOVER_V1" + device model (Build.MODEL).
+      Sent to COMMON_SERVER_IPS on UDP 9878:
+        192.168.137.1  (Windows Mobile Hotspot default gateway)
+        192.168.43.1   (Android hotspot gateway)
+        192.168.58.1, 192.168.1.1, 192.168.0.1, 10.0.0.1
+      Each with soTimeout 1500 ms; then listen 2000 ms.
+
+    Phase 2 - Broadcast sweep:
+      Up to 10 rounds: broadcast to every up/non-loopback IPv4 interface's
+      broadcast address plus a computed subnet broadcast
+      (computeBroadcast() sets host bits to 1 based on networkPrefixLength),
+      then listen 1500 ms.
+
+    Match: any response starting with "GPAD_SERVER_V1" (hostname after "|")
+    -> onServerFound(address, UDP_PORT, name).
+
+  Multicast lock "GamePadDiscovery" is held for the whole discovery so the
+  phone accepts multicast/broadcast frames (CHANGE_WIFI_MULTICAST_STATE).
+
+  On find: MainActivity.connectToServer()
+    1. Stops discovery, saves the server name.
+    2. udpClient.start(ip, 9876, context) - new DatagramSocket with
+       reuseAddress=true, trafficClass=0x10 (IP_TOS LOW_DELAY), soTimeout 3000.
+    3. NetworkBinder.bindSocket() ties the socket to the WiFi/hotspot network.
+    4. Fires onConnectionStateChanged(true) immediately (UDP is connectionless).
+    5. Starts sensors.
+    6. Launches the heartbeat coroutine (sendHeartbeat() every 1200 ms).
+
+  Response listener thread "UDP-Response-Listener" parses the server's 0xAA
+  assignment and reports the real player slot + hostname.
+
+  Manual connect: type an IP, connectToServer(ip, 9876, "Manual Server").
+
+  Disconnect: udpClient.stop() closes the socket, sensors stop, back to the
+  Connection screen.
+
+================================================================================
+14. UI & SCREENS (Connection screen, GamePad screen, components)
+================================================================================
+
+  ConnectionScreen (shown until connected):
+    - Dark theme (background #0D1117).
+    - Title "GamePad Controller" / "Offline Multiplayer Virtual Gamepad".
+    - Status card: searching spinner (amber) while discovering, green
+      "Connected" + server name + "Player N" when connected, else amber
+      "No server found" with hint text and a "Scan Again" button.
+    - "Manual IP Entry" toggle -> OutlinedTextField + Connect button.
+    - Profile selector: 5 pills (Xbox / Retro / FPS / Race / Custom).
+    - Quick Start card (5 steps: run server elevated, server creates
+      GamePad_Server hotspot, join WiFi gamepad123, tap Scan, add phones).
+
+  GamePadScreen (shown when connected):
+    - Renders every visible control of the active layout at its fraction
+      position (offset via IntOffset; position = x * screenW, y * screenH).
+    - HUD top bar: "P<slot> . <profile>" and live "<fps>Hz".
+    - 8 ms send loop (LaunchedEffect + Dispatchers.IO) builds the packet.
+    - Layout editor FAB + collapsible toolbar (cyan #00E5FF) with the size
+      slider, visibility switch, Reset / Save & Exit / Cancel.
+    - Background #0D1117; controls are translucent circles/rounded bars.
+
+  Components.kt:
+    - Haptics: lightTap (10 ms / 40 amplitude) and buttonPress (20 ms / 80)
+      via VibratorManager (API 31+) or legacy Vibrator.
+    - TouchButton: spring-scaled circular press button with icon.
+    - AnalogStick: draggable stick, dead zone 0.08, self-centering.
+    - DPad: cross of 4 touch arms around a 48 dp center disc (~140x140 dp).
+    - TriggerSlider: vertical slider (drag y), fill from the bottom.
+
+  MainActivity extras:
+    - enableEdgeToEdge + immersive fullscreen (system bars hidden, transient
+      swipe-to-show).
+    - FLAG_KEEP_SCREEN_ON.
+    - WiFi low-latency mode via reflection: WifiManager.setWifiMode(4)
+      (API 34+; harmless no-op/caught on older devices).
+
+================================================================================
+15. PERMISSIONS & MANIFEST (what each permission is for)
+================================================================================
+
+    INTERNET                         - UDP sockets to the server
+    ACCESS_NETWORK_STATE             - ConnectivityManager network binding
+    ACCESS_WIFI_STATE                - WifiManager (multicast lock, low-latency)
+    CHANGE_WIFI_MULTICAST_STATE      - acquire the discovery MulticastLock
+    HIGH_SAMPLING_RATE_SENSORS       - declared; only relevant above 200 Hz
+    VIBRATE                          - haptic feedback on button presses
+    WAKE_LOCK                        - GamePadApplication 4-hour partial lock
+
+  Manifest application tags:
+    android:name = .GamePadApplication
+    android:allowBackup = false
+    android:networkSecurityConfig = @xml/network_security_config
+      (cleartextTrafficPermitted="true" - required for raw UDP/local LAN,
+       no TLS involved)
+    android:theme = @style/Theme.GamePadController
+
+  Activity tags:
+    exported = true, launchMode = singleTask
+    screenOrientation = landscape, configChanges = orientation|screenSize|keyboardHidden
+    keepScreenOn = true, windowSoftInputMode = adjustResize
+    Launcher intent (MAIN / LAUNCHER)
+
+  GamePadApplication acquires a PARTIAL_WAKE_LOCK ("GamePadEcosystem::GameplayLock")
+  for 4 hours on app start, so CPU never sleeps mid-game. The lock is the
+  responsibility of the app process - it is NOT released on screen close but
+  is released on onTerminate() (and automatically when the process dies).
+
+================================================================================
+16. COMPLETE SOURCE CODE - EVERY FILE, VERBATIM
+================================================================================
+
+  All paths below are relative to:
+    D:\GamePadEcosystem\GamePadEcosystem\client\
+  and identical in the repo at commit 5cf3d5e (tag v1.1.1).
+
+--------------------------------------------------------------------------------
+16.1  AndroidManifest.xml  (app/src/main/AndroidManifest.xml)
+--------------------------------------------------------------------------------
+
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Network -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- Sensors & Haptics -->
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Keep screen on -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:name=".GamePadApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.GamePadController"
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize"
+            android:keepScreenOn="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
+
+--------------------------------------------------------------------------------
+16.2  build.gradle.kts  (app/build.gradle.kts) - full file
+--------------------------------------------------------------------------------
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+android {
+    namespace = "com.gamepad.controller"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.gamepad.controller"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 3
+        versionName = "1.1.1"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            signingConfig = signingConfigs.getByName("debug")
+        }
+        debug {
+            isDebuggable = true
+            applicationIdSuffix = ".debug"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        compose = true
+    }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+}
+
+dependencies {
+    // Compose BOM - pins all Compose versions together
+    val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
+    implementation(composeBom)
+
+    // Core
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.activity:activity-compose:1.9.3")
+
+    // Compose UI
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+
+    // Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // Debug
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+--------------------------------------------------------------------------------
+16.3  settings.gradle.kts  (settings.gradle.kts) - full file
+--------------------------------------------------------------------------------
+
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "GamePadController"
+include(":app")
+
+--------------------------------------------------------------------------------
+16.4  res/xml/network_security_config.xml
+--------------------------------------------------------------------------------
+
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
+
+--------------------------------------------------------------------------------
+16.5  GamePadApplication.kt  (java/com/gamepad/controller/GamePadApplication.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller
+
+import android.app.Application
+import android.os.PowerManager
+
+/**
+ * Application-level wake lock to prevent CPU sleep during gameplay.
+ */
+class GamePadApplication : Application() {
+
+    var wakeLock: PowerManager.WakeLock? = null
+        private set
+
+    override fun onCreate() {
+        super.onCreate()
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "GamePadEcosystem::GameplayLock"
+        ).apply { acquire(4 * 60 * 60 * 1000L) } // 4 hour max
+    }
+
+    override fun onTerminate() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        super.onTerminate()
+    }
+}
+
+--------------------------------------------------------------------------------
+16.6  MainActivity.kt  (java/com/gamepad/controller/MainActivity.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller
+
+import android.os.Bundle
+import android.util.Log
+import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.*
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import com.gamepad.controller.network.DiscoveryClient
+import com.gamepad.controller.network.InputPacket
+import com.gamepad.controller.network.Protocol
+import com.gamepad.controller.network.UdpInputClient
+import com.gamepad.controller.profiles.ControllerProfile
+import com.gamepad.controller.sensors.SensorInputManager
+import com.gamepad.controller.ui.screens.ConnectionScreen
+import com.gamepad.controller.ui.screens.GamePadScreen
+import kotlinx.coroutines.*
+import java.net.InetAddress
+
+class MainActivity : ComponentActivity() {
+
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
+    private val udpClient = UdpInputClient()
+    private val discoveryClient = DiscoveryClient()
+    private var sensorManager: SensorInputManager? = null
+
+    private var isConnected by mutableStateOf(false)
+    private var serverName by mutableStateOf("")
+    private var playerSlot by mutableIntStateOf(0)
+    private var currentProfile by mutableStateOf(ControllerProfile.XBOX_STANDARD)
+    private var isDiscovering by mutableStateOf(false)
+    private var showGamepad by mutableStateOf(false)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+
+        // Fullscreen immersive - modern API
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).let { controller ->
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+
+        // WiFi low-latency mode (API 34+)
+        try {
+            val wm = applicationContext.getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager
+            wm.javaClass.getMethod("setWifiMode", Int::class.java)
+                .invoke(wm, 4)
+        } catch (e: Exception) { Log.w(TAG, "WiFi low-latency unavailable: ${e.message}") }
+
+        sensorManager = SensorInputManager(this)
+
+        // Discovery callback
+        discoveryClient.onServerFound = { info ->
+            runOnUiThread { connectToServer(info.address, info.port, info.name) }
+        }
+
+        // Connection state callback
+        udpClient.onConnectionStateChanged = { connected ->
+            runOnUiThread {
+                isConnected = connected
+                showGamepad = connected
+            }
+        }
+
+        // Server assignment callback - get real player slot from server
+        udpClient.onPlayerAssigned = { slot, name ->
+            runOnUiThread {
+                playerSlot = slot
+                serverName = name
+                Log.d(TAG, "Assigned Player ${slot + 1} by server: $name")
+            }
+        }
+
+        setContent {
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                if (showGamepad) {
+                    GamePadScreen(currentProfile, ::sendInputPacket, playerSlot, serverName)
+                } else {
+                    ConnectionScreen(
+                        isConnected = isConnected, serverName = serverName, playerSlot = playerSlot,
+                        currentProfile = currentProfile, isDiscovering = isDiscovering,
+                        onConnect = ::startDiscovery, onDisconnect = ::disconnect,
+                        onProfileChange = { currentProfile = it }, onManualConnect = ::connectManual
+                    )
+                }
+            }
+        }
+
+        startDiscovery()
+    }
+
+    private fun startDiscovery() {
+        isDiscovering = true
+        discoveryClient.startDiscovery(lifecycleScope, applicationContext)
+    }
+
+    private fun connectToServer(address: InetAddress, port: Int, name: String) {
+        isDiscovering = false
+        discoveryClient.stopDiscovery()
+        serverName = name
+        udpClient.start(address, port, applicationContext)
+        sensorManager?.start()
+
+        // Heartbeat loop - faster than the 2000ms server timeout for a safety margin
+        lifecycleScope.launch {
+            while (isActive) { udpClient.sendHeartbeat(); delay(1200) }
+        }
+    }
+
+    private fun connectManual(ip: String) {
+        try {
+            connectToServer(InetAddress.getByName(ip), Protocol.UDP_PORT, "Manual Server")
+        } catch (e: Exception) { Log.e(TAG, "Failed to connect to $ip", e) }
+    }
+
+    private fun disconnect() {
+        udpClient.stop()
+        sensorManager?.stop()
+        showGamepad = false
+        isConnected = false
+        isDiscovering = false
+    }
+
+    private fun sendInputPacket(packet: InputPacket) {
+        sensorManager?.let { s ->
+            if (s.isRunning && currentProfile.showMotion) {
+                val g = s.getGyroDelta()
+                packet.gyroX = g.first; packet.gyroY = g.second; packet.gyroZ = g.third
+            }
+        }
+        udpClient.sendInput(packet)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        sensorManager?.stop()
+        udpClient.stop()
+        discoveryClient.stopDiscovery()
+    }
+}
+
+--------------------------------------------------------------------------------
+16.7  network/Protocol.kt  (java/com/gamepad/controller/network/Protocol.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.network
+
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+/**
+ * Shared protocol constants - must match the Windows server exactly.
+ */
+object Protocol {
+    const val UDP_PORT = 9876
+    const val TCP_PORT = 9877
+    const val DISCOVERY_PORT = 9878
+    const val MAX_PLAYERS = 8
+    const val DISCONNECTION_TIMEOUT_MS = 2000L
+    const val PACKET_MAGIC = 0x47504144 // "GPAD"
+
+    val DISCOVERY_MAGIC = "GPAD_DISCOVER_V1".toByteArray()
+
+    object PacketType {
+        const val INPUT: Byte = 0x01
+        const val HEARTBEAT: Byte = 0x02
+        const val GYRO: Byte = 0x03
+        const val CONFIG: Byte = 0x04
+    }
+
+    object ButtonFlag {
+        val A            = 1u
+        val B            = 1u shl 1
+        val X            = 1u shl 2
+        val Y            = 1u shl 3
+        val LEFT_BUMPER  = 1u shl 4
+        val RIGHT_BUMPER = 1u shl 5
+        val BACK         = 1u shl 6
+        val START        = 1u shl 7
+        val LEFT_STICK   = 1u shl 8
+        val RIGHT_STICK  = 1u shl 9
+        val DPAD_UP      = 1u shl 10
+        val DPAD_DOWN    = 1u shl 11
+        val DPAD_LEFT    = 1u shl 12
+        val DPAD_RIGHT   = 1u shl 13
+        val GUIDE        = 1u shl 14
+    }
+}
+
+/**
+ * Compact 34-byte binary input packet for sub-5ms UDP transmission.
+ */
+data class InputPacket(
+    var packetType: Byte = Protocol.PacketType.INPUT,
+    var deviceId: Byte = 0,
+    var sequence: UShort = 0u,
+    var buttons: UInt = 0u,
+    var leftX: Short = 0,
+    var leftY: Short = 0,
+    var rightX: Short = 0,
+    var rightY: Short = 0,
+    var leftTrigger: Byte = 0,
+    var rightTrigger: Byte = 0,
+    var gyroX: Float = 0f,
+    var gyroY: Float = 0f,
+    var gyroZ: Float = 0f
+) {
+    fun serialize(): ByteArray {
+        val buf = ByteBuffer.allocate(SIZE).order(ByteOrder.LITTLE_ENDIAN)
+        buf.putInt(Protocol.PACKET_MAGIC)
+        buf.put(packetType)
+        buf.put(deviceId)
+        buf.putShort(sequence.toShort())
+        buf.putInt(buttons.toInt())
+        buf.putShort(leftX)
+        buf.putShort(leftY)
+        buf.putShort(rightX)
+        buf.putShort(rightY)
+        buf.put(leftTrigger)
+        buf.put(rightTrigger)
+        buf.putFloat(gyroX)
+        buf.putFloat(gyroY)
+        buf.putFloat(gyroZ)
+        return buf.array()
+    }
+
+    companion object {
+        const val SIZE = 34
+
+        fun deserialize(data: ByteArray): InputPacket? {
+            if (data.size < SIZE) return null
+            val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+            if (buf.int != Protocol.PACKET_MAGIC) return null
+            return InputPacket(
+                packetType = buf.get(),
+                deviceId = buf.get(),
+                sequence = buf.short.toUShort(),
+                buttons = buf.int.toUInt(),
+                leftX = buf.short,
+                leftY = buf.short,
+                rightX = buf.short,
+                rightY = buf.short,
+                leftTrigger = buf.get(),
+                rightTrigger = buf.get(),
+                gyroX = buf.float,
+                gyroY = buf.float,
+                gyroZ = buf.float
+            )
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+16.8  network/UdpInputClient.kt  (java/com/gamepad/controller/network/UdpInputClient.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.network
+
+import android.content.Context
+import android.util.Log
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+
+class UdpInputClient {
+
+    companion object {
+        private const val TAG = "UdpInputClient"
+        private const val TRAFFIC_CLASS_LOW_DELAY = 0x10
+    }
+
+    private var socket: DatagramSocket? = null
+    private var serverAddress: InetAddress? = null
+    private var serverPort: Int = Protocol.UDP_PORT
+    private val isRunning = AtomicBoolean(false)
+    private val sequenceCounter = AtomicInteger(0)
+
+    var onConnectionStateChanged: ((Boolean) -> Unit)? = null
+    var onPlayerAssigned: ((Int, String) -> Unit)? = null
+    var onPacketsSent: ((Int) -> Unit)? = null
+
+    fun start(serverAddress: InetAddress, serverPort: Int = Protocol.UDP_PORT, context: Context? = null) {
+        if (isRunning.get()) stop()
+        this.serverAddress = serverAddress
+        this.serverPort = serverPort
+
+        try {
+            socket = DatagramSocket().apply {
+                reuseAddress = true
+                trafficClass = TRAFFIC_CLASS_LOW_DELAY
+                soTimeout = 3000
+            }
+            if (context != null) {
+                NetworkBinder.bindSocket(context, socket!!)
+            }
+            isRunning.set(true)
+            Log.d(TAG, "UDP client started - $serverAddress:$serverPort")
+
+            // Listen for server assignment response
+            startResponseListener()
+
+            // Fire connected immediately (UDP is connectionless)
+            onConnectionStateChanged?.invoke(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start UDP client", e)
+        }
+    }
+
+    private fun startResponseListener() {
+        Thread({
+            val buf = ByteArray(256)
+            while (isRunning.get()) {
+                try {
+                    val pkt = DatagramPacket(buf, buf.size)
+                    socket?.receive(pkt)
+                    val data = pkt.data.copyOf(pkt.length)
+
+                    // Check for assignment packet (magic 0xAA)
+                    if (data.size >= 2 && data[0] == 0xAA.toByte()) {
+                        val playerSlot = data[1].toInt()
+                        val serverName = if (data.size > 2) String(data, 2, data.size - 2) else "Server"
+                        Log.d(TAG, "Received assignment: Player ${playerSlot + 1} from $serverName")
+                        onPlayerAssigned?.invoke(playerSlot, serverName)
+                    }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // Normal - no packet within timeout, keep listening
+                } catch (e: Exception) {
+                    if (isRunning.get()) Log.e(TAG, "Response listener error", e)
+                }
+            }
+        }, "UDP-Response-Listener").start()
+    }
+
+    fun stop() {
+        isRunning.set(false)
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
+        onConnectionStateChanged?.invoke(false)
+        Log.d(TAG, "UDP client stopped")
+    }
+
+    fun sendInput(packet: InputPacket) {
+        if (!isRunning.get()) return
+        val addr = serverAddress ?: return
+        val sock = socket ?: return
+
+        packet.sequence = (sequenceCounter.getAndIncrement() and 0xFFFF).toUShort()
+
+        try {
+            val data = packet.serialize()
+            sock.send(DatagramPacket(data, data.size, addr, serverPort))
+            onPacketsSent?.invoke(1)
+        } catch (e: Exception) {
+            Log.e(TAG, "Send failed", e)
+        }
+    }
+
+    fun sendHeartbeat() {
+        if (!isRunning.get()) return
+        val hb = InputPacket(
+            packetType = Protocol.PacketType.HEARTBEAT,
+            sequence = (sequenceCounter.getAndIncrement() and 0xFFFF).toUShort()
+        )
+        sendInput(hb)
+    }
+
+    fun isConnected(): Boolean = isRunning.get() && socket != null && serverAddress != null
+}
+
+--------------------------------------------------------------------------------
+16.9  network/DiscoveryClient.kt  (java/com/gamepad/controller/network/DiscoveryClient.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.network
+
+import android.content.Context
+import android.net.wifi.WifiManager
+import android.util.Log
+import kotlinx.coroutines.*
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.NetworkInterface
+import java.util.concurrent.atomic.AtomicBoolean
+
+class DiscoveryClient {
+
+    companion object {
+        private const val TAG = "DiscoveryClient"
+        private val COMMON_SERVER_IPS = listOf(
+            "192.168.137.1",  // Windows Mobile Hotspot default gateway
+            "192.168.43.1",  // Android hotspot gateway
+            "192.168.58.1",
+            "192.168.1.1",
+            "192.168.0.1",
+            "10.0.0.1",
+        )
+    }
+
+    private var socket: DatagramSocket? = null
+    private val isDiscovering = AtomicBoolean(false)
+    private var discoveryJob: Job? = null
+    private var appContext: Context? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    data class ServerInfo(
+        val address: java.net.InetAddress,
+        val port: Int,
+        val name: String
+    )
+
+    var onServerFound: ((ServerInfo) -> Unit)? = null
+
+    fun startDiscovery(scope: CoroutineScope, context: Context? = null) {
+        if (isDiscovering.get()) return
+        isDiscovering.set(true)
+        appContext = context
+
+        acquireMulticastLock(context)
+
+        discoveryJob = scope.launch(Dispatchers.IO) {
+            try {
+                socket = DatagramSocket().apply {
+                    broadcast = true
+                    soTimeout = 1500
+                }
+
+                // Try binding to WiFi - log result
+                val bound = if (context != null) {
+                    NetworkBinder.bindSocket(context, socket!!)
+                } else false
+                Log.d(TAG, "Socket WiFi binding: $bound")
+
+                val deviceName = android.os.Build.MODEL
+                val payload = Protocol.DISCOVERY_MAGIC + deviceName.toByteArray()
+
+                Log.d(TAG, "=== Discovery Phase 1: Direct IP probes ===")
+
+                // Phase 1: Send to common server IPs directly
+                for (ip in COMMON_SERVER_IPS) {
+                    if (!isDiscovering.get() || !isActive) break
+                    try {
+                        val addr = InetAddress.getByName(ip)
+                        socket?.send(DatagramPacket(payload, payload.size, addr, Protocol.DISCOVERY_PORT))
+                        Log.d(TAG, "Sent probe to $ip")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to probe $ip: ${e.message}")
+                    }
+                }
+
+                // Listen for responses
+                var found = listenForServer(2000)
+                if (found) return@launch
+
+                Log.d(TAG, "=== Discovery Phase 2: Broadcast scan ===")
+
+                // Phase 2: Broadcast to all interfaces
+                var retries = 0
+                while (isDiscovering.get() && isActive && retries < 10) {
+                    broadcastToAllInterfaces(payload)
+                    found = listenForServer(1500)
+                    if (found) return@launch
+                    retries++
+                }
+
+                Log.w(TAG, "Discovery complete - no server found after ${retries + 1} rounds")
+                Log.w(TAG, "Try: Manual IP entry, or verify PC hotspot is ON")
+            } catch (e: CancellationException) {
+                Log.d(TAG, "Discovery cancelled")
+            } catch (e: Exception) {
+                Log.e(TAG, "Discovery error", e)
+            }
+        }
+    }
+
+    /**
+     * Listen for a server response. Returns true if found.
+     */
+    private suspend fun listenForServer(timeoutMs: Long): Boolean {
+        val startTime = System.currentTimeMillis()
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            try {
+                val buf = ByteArray(512)
+                val pkt = DatagramPacket(buf, buf.size)
+                socket?.receive(pkt)
+
+                val response = String(pkt.data, 0, pkt.length)
+                Log.d(TAG, "Received: '${response}' from ${pkt.address.hostAddress}")
+
+                if (response.startsWith("GPAD_SERVER_V1")) {
+                    val serverName = if (response.contains("|")) response.substringAfter("|") else "Server"
+                    val serverAddr = pkt.address
+                    Log.d(TAG, "SERVER FOUND: $serverName @ ${serverAddr.hostAddress}")
+                    onServerFound?.invoke(ServerInfo(serverAddr, Protocol.UDP_PORT, serverName))
+                    delay(300)
+                    return true
+                }
+            } catch (_: java.net.SocketTimeoutException) {
+                // Normal
+            }
+        }
+        return false
+    }
+
+    private fun acquireMulticastLock(context: Context?) {
+        try {
+            val wifiManager = context?.applicationContext?.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            multicastLock = wifiManager?.createMulticastLock("GamePadDiscovery")?.apply {
+                setReferenceCounted(false)
+                acquire()
+                Log.d(TAG, "Multicast lock acquired")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not acquire multicast lock: ${e.message}")
+        }
+    }
+
+    private fun broadcastToAllInterfaces(payload: ByteArray) {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val ni = interfaces.nextElement()
+                if (!ni.isUp || ni.isLoopback) continue
+                for (ia in ni.interfaceAddresses) {
+                    val addr = ia.address ?: continue
+                    if (addr !is java.net.Inet4Address) continue
+
+                    // Send to interface broadcast address
+                    ia.broadcast?.let { bcast ->
+                        try {
+                            socket?.send(DatagramPacket(payload, payload.size, bcast, Protocol.DISCOVERY_PORT))
+                            Log.d(TAG, "Broadcast via ${ia.broadcast} on ${ni.displayName}")
+                        } catch (_: Exception) {}
+                    }
+
+                    // Compute and send to subnet broadcast
+                    try {
+                        val prefixLen = ia.networkPrefixLength.toInt()
+                        val broadcastAddr = computeBroadcast(addr, prefixLen)
+                        socket?.send(DatagramPacket(payload, payload.size, broadcastAddr, Protocol.DISCOVERY_PORT))
+                        Log.d(TAG, "Broadcast to computed: $broadcastAddr")
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Broadcast error: ${e.message}")
+        }
+    }
+
+    private fun computeBroadcast(ip: InetAddress, prefixLen: Int): InetAddress {
+        val ipBytes = ip.address
+        val broadcastBytes = ByteArray(4)
+        for (i in 0 until 4) {
+            val bitOffset = i * 8
+            for (bit in 0 until 8) {
+                val globalBit = bitOffset + bit
+                if (globalBit < prefixLen) {
+                    broadcastBytes[i] = (broadcastBytes[i].toInt() or (ipBytes[i].toInt() and (1 shl (7 - bit)))).toByte()
+                } else {
+                    broadcastBytes[i] = (broadcastBytes[i].toInt() or (1 shl (7 - bit))).toByte()
+                }
+            }
+        }
+        return InetAddress.getByAddress(broadcastBytes)
+    }
+
+    fun stopDiscovery() {
+        isDiscovering.set(false)
+        discoveryJob?.cancel()
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
+        releaseMulticastLock()
+    }
+
+    private fun releaseMulticastLock() {
+        try {
+            multicastLock?.release()
+            multicastLock = null
+        } catch (_: Exception) {}
+    }
+}
+
+--------------------------------------------------------------------------------
+16.10  network/NetworkBinder.kt  (java/com/gamepad/controller/network/NetworkBinder.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.network
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.util.Log
+import java.net.DatagramSocket
+
+/**
+ * Binds sockets to the WiFi/hotspot network so traffic doesn't leak
+ * through mobile data when both are active.
+ *
+ * When the phone connects to the PC's hotspot, it's a WiFi client.
+ * Without explicit binding, Android may route UDP packets through
+ * mobile data instead of the hotspot interface.
+ */
+object NetworkBinder {
+
+    private const val TAG = "NetworkBinder"
+
+    /**
+     * Find the WiFi/hotspot Network and bind a socket to it.
+     * Returns true if binding succeeded, false otherwise.
+     */
+    fun bindSocket(context: Context, socket: DatagramSocket): Boolean {
+        val network = findWifiNetwork(context)
+        if (network == null) {
+            Log.w(TAG, "No WiFi network found - socket will use default route (may fail)")
+            return false
+        }
+        return try {
+            network.bindSocket(socket)
+            Log.d(TAG, "Socket bound to network: $network")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to bind socket to network", e)
+            false
+        }
+    }
+
+    /**
+     * Find the WiFi network. When connected to a PC hotspot, this is
+     * the WiFi interface connecting to the hotspot AP.
+     *
+     * Priority: active WiFi > any WiFi > any non-cellular network
+     */
+    private fun findWifiNetwork(context: Context): Network? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        // Fast path: check if active network is WiFi
+        val active = cm.activeNetwork
+        if (active != null) {
+            val activeCaps = cm.getNetworkCapabilities(active)
+            if (activeCaps != null) {
+                if (activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    Log.d(TAG, "Active network is WiFi: $active")
+                    return active
+                }
+                // Fallback: if active is not cellular, it might be hotspot-related
+                if (!activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+                    !activeCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                    Log.d(TAG, "Active network is non-cellular, non-VPN: $active (transports=${activeCaps.toString().take(100)})")
+                    return active
+                }
+            }
+        }
+
+        // Slow path: scan all networks
+        @Suppress("DEPRECATION")
+        for (network in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(network) ?: continue
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                Log.d(TAG, "Found WiFi network: $network")
+                return network
+            }
+        }
+
+        // Last resort: try the active network even if it's cellular
+        if (active != null) {
+            Log.w(TAG, "No WiFi found, trying active network: $active")
+            return active
+        }
+
+        Log.e(TAG, "No network found at all")
+        return null
+    }
+}
+
+--------------------------------------------------------------------------------
+16.11  sensors/SensorInputManager.kt  (java/com/gamepad/controller/sensors/SensorInputManager.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.sensors
+
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.util.Log
+import kotlin.math.abs
+
+/**
+ * Reads gyroscope and accelerometer at SENSOR_DELAY_GAME rate.
+ * Provides both raw IMU data and processed motion-axis values.
+ */
+class SensorInputManager(context: Context) : SensorEventListener {
+
+    companion object {
+        private const val TAG = "SensorInputManager"
+        private const val DEAD_ZONE = 0.02f
+        private const val GRAVITY = 9.8f
+    }
+
+    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+    private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+
+    private val gyroData = FloatArray(3)
+    private val accelData = FloatArray(3)
+
+    val gyroX: Float get() = gyroData[0]
+    val gyroY: Float get() = gyroData[1]
+    val gyroZ: Float get() = gyroData[2]
+    val accelX: Float get() = accelData[0]
+    val accelY: Float get() = accelData[1]
+    val accelZ: Float get() = accelData[2]
+
+    var sensitivity = 1.0f
+    var isRunning = false
+        private set
+
+    fun start() {
+        if (isRunning) return
+        gyroscope?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+            Log.d(TAG, "Gyroscope registered")
+        } ?: Log.w(TAG, "Gyroscope unavailable")
+        accelerometer?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+            Log.d(TAG, "Accelerometer registered")
+        } ?: Log.w(TAG, "Accelerometer unavailable")
+        isRunning = true
+    }
+
+    fun stop() {
+        sensorManager.unregisterListener(this)
+        isRunning = false
+    }
+
+    /**
+     * Tilt-based axis for left stick: pitch -> Y, roll -> X.
+     * Returns values in -1.0..1.0 range.
+     */
+    fun getMotionAxis(): Pair<Float, Float> {
+        val x = if (abs(accelData[0]) < DEAD_ZONE) 0f else accelData[0]
+        val y = if (abs(accelData[1]) < DEAD_ZONE) 0f else accelData[1]
+        return Pair(
+            (x / GRAVITY * sensitivity).coerceIn(-1f, 1f),
+            (y / GRAVITY * sensitivity).coerceIn(-1f, 1f)
+        )
+    }
+
+    /**
+     * Gyro angular velocity for precision aiming.
+     */
+    fun getGyroDelta(): Triple<Float, Float, Float> {
+        fun applyDeadZone(v: Float) = if (abs(v) < DEAD_ZONE) 0f else v * sensitivity
+        return Triple(
+            applyDeadZone(gyroData[0]),
+            applyDeadZone(gyroData[1]),
+            applyDeadZone(gyroData[2])
+        )
+    }
+
+    fun isGyroAvailable(): Boolean = gyroscope != null
+    fun isAccelAvailable(): Boolean = accelerometer != null
+
+    override fun onSensorChanged(event: SensorEvent) {
+        when (event.sensor.type) {
+            Sensor.TYPE_GYROSCOPE -> System.arraycopy(event.values, 0, gyroData, 0, 3)
+            Sensor.TYPE_ACCELEROMETER -> System.arraycopy(event.values, 0, accelData, 0, 3)
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+}
+
+--------------------------------------------------------------------------------
+16.12  layout/ButtonLayout.kt  (java/com/gamepad/controller/layout/ButtonLayout.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.layout
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.widget.Toast
+import com.gamepad.controller.network.Protocol
+import com.gamepad.controller.profiles.ControllerProfile
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * Each control element in the gamepad layout.
+ * Position is in screen-relative fractions (0.0-1.0).
+ * Size is in dp.
+ */
+data class ButtonLayout(
+    val id: String,
+    val type: ElementType,
+    val x: Float = 0.5f,
+    val y: Float = 0.5f,
+    val sizeDp: Int = 56,
+    val label: String = "",
+    val color: Long = 0xFF4CAF50,
+    val visible: Boolean = true,
+    val buttonFlag: UInt = 0u
+) {
+    enum class ElementType {
+        STICK_LEFT,
+        STICK_RIGHT,
+        STICK_CLICK_L, STICK_CLICK_R,
+        FACE_A, FACE_B, FACE_X, FACE_Y,
+        DPAD_UP, DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT,
+        BUMPER_L, BUMPER_R,
+        TRIGGER_L, TRIGGER_R,
+        CENTER_BACK, CENTER_GUIDE, CENTER_START
+    }
+
+    /**
+     * Whether this control is shown for the given controller profile.
+     */
+    fun isVisibleIn(profile: ControllerProfile): Boolean = when (this.type) {
+        ElementType.STICK_LEFT, ElementType.STICK_RIGHT,
+        ElementType.STICK_CLICK_L, ElementType.STICK_CLICK_R -> profile.showSticks
+        ElementType.FACE_A, ElementType.FACE_B, ElementType.FACE_X, ElementType.FACE_Y -> profile.showFaceButtons
+        ElementType.DPAD_UP, ElementType.DPAD_DOWN, ElementType.DPAD_LEFT, ElementType.DPAD_RIGHT -> profile.showDpad
+        ElementType.BUMPER_L, ElementType.BUMPER_R -> profile.showBumpers
+        ElementType.TRIGGER_L, ElementType.TRIGGER_R -> profile.showTriggers
+        ElementType.CENTER_BACK, ElementType.CENTER_GUIDE, ElementType.CENTER_START -> profile.showCenterButtons
+    }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
+        put("type", type.name)
+        put("x", x)
+        put("y", y)
+        put("sizeDp", sizeDp)
+        put("label", label)
+        put("color", color)
+        put("visible", visible)
+        put("buttonFlag", buttonFlag.toLong())
+    }
+
+    companion object {
+        fun fromJson(json: JSONObject): ButtonLayout = ButtonLayout(
+            id = json.getString("id"),
+            type = ElementType.valueOf(json.getString("type")),
+            x = json.getDouble("x").toFloat(),
+            y = json.getDouble("y").toFloat(),
+            sizeDp = json.getInt("sizeDp"),
+            label = json.optString("label", ""),
+            color = json.optLong("color", 0xFF4CAF50),
+            visible = json.optBoolean("visible", true),
+            buttonFlag = json.optLong("buttonFlag", 0).toUInt()
+        )
+    }
+}
+
+/**
+ * Complete controller layout - collection of all button positions.
+ */
+data class ControllerLayout(
+    val name: String = "Default",
+    val buttons: List<ButtonLayout> = emptyList()
+) {
+    fun toJson(): String {
+        val arr = JSONArray()
+        buttons.forEach { arr.put(it.toJson()) }
+        return JSONObject().apply {
+            put("name", name)
+            put("buttons", arr)
+        }.toString(2)
+    }
+
+    companion object {
+        fun fromJson(json: String): ControllerLayout {
+            val obj = JSONObject(json)
+            val arr = obj.getJSONArray("buttons")
+            val buttons = (0 until arr.length()).map { ButtonLayout.fromJson(arr.getJSONObject(it)) }
+            return ControllerLayout(name = obj.optString("name", "Default"), buttons = buttons)
+        }
+    }
+}
+
+/**
+ * Default Xbox 360 layout - all positions in screen-relative fractions.
+ * Follows the ergonomic shoulder-tab design: bumpers + triggers along the
+ * top edge (index fingers), sticks in the thumb zones, L3/R3 press buttons
+ * tucked beside each stick, and small system buttons on the top-center edge.
+ *
+ *   LT  LB  [Select] [Guide] [Start]           RB  RT      <- index fingers
+ *   L3 (LStick)                                  (ABXY) R3
+ *              DPad                      (RStick)
+ */
+fun defaultXboxLayout(): ControllerLayout = ControllerLayout(
+    name = "Xbox",
+    buttons = listOf(
+        // Left stick - left-middle thumb zone
+        ButtonLayout("lstick", ButtonLayout.ElementType.STICK_LEFT, 0.18f, 0.45f, 140, "L", 0x00000000, true),
+        // Right stick - lower-right thumb zone
+        ButtonLayout("rstick", ButtonLayout.ElementType.STICK_RIGHT, 0.82f, 0.72f, 140, "R", 0x00000000, true),
+
+        // Face buttons - right thumb diamond (upper-right)
+        ButtonLayout("face_a", ButtonLayout.ElementType.FACE_A, 0.80f, 0.36f, 52, "A", 0xFF4CAF50, true, Protocol.ButtonFlag.A),
+        ButtonLayout("face_b", ButtonLayout.ElementType.FACE_B, 0.88f, 0.28f, 52, "B", 0xFFE53935, true, Protocol.ButtonFlag.B),
+        ButtonLayout("face_x", ButtonLayout.ElementType.FACE_X, 0.72f, 0.28f, 52, "X", 0xFF2196F3, true, Protocol.ButtonFlag.X),
+        ButtonLayout("face_y", ButtonLayout.ElementType.FACE_Y, 0.80f, 0.20f, 52, "Y", 0xFFFFEB3B, true, Protocol.ButtonFlag.Y),
+
+        // D-Pad - lower-left quadrant
+        ButtonLayout("dpad_up", ButtonLayout.ElementType.DPAD_UP, 0.18f, 0.68f, 44, "UP", 0x00000000, true, Protocol.ButtonFlag.DPAD_UP),
+        ButtonLayout("dpad_down", ButtonLayout.ElementType.DPAD_DOWN, 0.18f, 0.88f, 44, "DOWN", 0x00000000, true, Protocol.ButtonFlag.DPAD_DOWN),
+        ButtonLayout("dpad_left", ButtonLayout.ElementType.DPAD_LEFT, 0.10f, 0.78f, 44, "LEFT", 0x00000000, true, Protocol.ButtonFlag.DPAD_LEFT),
+        ButtonLayout("dpad_right", ButtonLayout.ElementType.DPAD_RIGHT, 0.26f, 0.78f, 44, "RIGHT", 0x00000000, true, Protocol.ButtonFlag.DPAD_RIGHT),
+
+        // Bumpers - top corners (index fingers)
+        ButtonLayout("bumper_l", ButtonLayout.ElementType.BUMPER_L, 0.06f, 0.08f, 56, "LB", 0xFF607D8B, true, Protocol.ButtonFlag.LEFT_BUMPER),
+        ButtonLayout("bumper_r", ButtonLayout.ElementType.BUMPER_R, 0.94f, 0.08f, 56, "RB", 0xFF607D8B, true, Protocol.ButtonFlag.RIGHT_BUMPER),
+
+        // Triggers - shoulder tabs along the top edge, inside the bumpers
+        ButtonLayout("trigger_l", ButtonLayout.ElementType.TRIGGER_L, 0.17f, 0.09f, 40, "LT", 0xFF607D8B, true),
+        ButtonLayout("trigger_r", ButtonLayout.ElementType.TRIGGER_R, 0.83f, 0.09f, 40, "RT", 0xFF607D8B, true),
+
+        // Stick-press buttons (L3 / R3) - tucked beside each stick
+        ButtonLayout("stick_click_l", ButtonLayout.ElementType.STICK_CLICK_L, 0.06f, 0.45f, 36, "L3", 0xFF455A64, true, Protocol.ButtonFlag.LEFT_STICK),
+        ButtonLayout("stick_click_r", ButtonLayout.ElementType.STICK_CLICK_R, 0.94f, 0.72f, 36, "R3", 0xFF455A64, true, Protocol.ButtonFlag.RIGHT_STICK),
+
+        // Center buttons - small icons on the top-center edge, out of play
+        ButtonLayout("center_back", ButtonLayout.ElementType.CENTER_BACK, 0.40f, 0.10f, 30, "BACK", 0xFF757575, true, Protocol.ButtonFlag.BACK),
+        ButtonLayout("center_guide", ButtonLayout.ElementType.CENTER_GUIDE, 0.50f, 0.10f, 34, "GUIDE", 0xFF9E9E9E, true, Protocol.ButtonFlag.GUIDE),
+        ButtonLayout("center_start", ButtonLayout.ElementType.CENTER_START, 0.60f, 0.10f, 30, "START", 0xFF757575, true, Protocol.ButtonFlag.START),
+    )
+)
+
+/**
+ * Layout persistence via SharedPreferences.
+ * Uses commit() for synchronous writes to prevent data loss.
+ */
+object LayoutManager {
+    private const val PREFS_NAME = "gamepad_layouts"
+    private const val KEY_CURRENT = "current_layout"
+    private const val KEY_CUSTOM_PREFIX = "custom_"
+
+    private fun prefs(context: Context): SharedPreferences =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    fun saveLayout(context: Context, layout: ControllerLayout): Boolean {
+        return prefs(context).edit()
+            .putString("$KEY_CUSTOM_PREFIX${layout.name}", layout.toJson())
+            .commit()
+    }
+
+    fun loadLayout(context: Context, name: String): ControllerLayout? {
+        val json = prefs(context).getString("$KEY_CUSTOM_PREFIX$name", null) ?: return null
+        return try { ControllerLayout.fromJson(json) } catch (_: Exception) { null }
+    }
+
+    fun saveCurrent(context: Context, layout: ControllerLayout): Boolean {
+        val saved = saveLayout(context, layout)
+        val nameSaved = prefs(context).edit().putString(KEY_CURRENT, layout.name).commit()
+        return saved && nameSaved
+    }
+
+    fun loadCurrent(context: Context): ControllerLayout {
+        val name = prefs(context).getString(KEY_CURRENT, null)
+        val layout = if (name != null) loadLayout(context, name) else null
+        return ensureStickClicks(layout ?: defaultXboxLayout())
+    }
+
+    /**
+     * Migration for layouts saved before v1.1.1: injects the L3/R3 stick-press
+     * buttons if the saved layout predates them, preserving user positions.
+     */
+    private fun ensureStickClicks(layout: ControllerLayout): ControllerLayout {
+        val hasL3 = layout.buttons.any { it.type == ButtonLayout.ElementType.STICK_CLICK_L }
+        val hasR3 = layout.buttons.any { it.type == ButtonLayout.ElementType.STICK_CLICK_R }
+        if (hasL3 && hasR3) return layout
+
+        val defaults = defaultXboxLayout().buttons
+        val missing = buildList {
+            if (!hasL3) add(defaults.first { it.type == ButtonLayout.ElementType.STICK_CLICK_L })
+            if (!hasR3) add(defaults.first { it.type == ButtonLayout.ElementType.STICK_CLICK_R })
+        }
+        return layout.copy(buttons = layout.buttons + missing)
+    }
+
+    fun listLayouts(context: Context): List<String> {
+        return prefs(context).all.keys
+            .filter { it.startsWith(KEY_CUSTOM_PREFIX) }
+            .map { it.removePrefix(KEY_CUSTOM_PREFIX) }
+            .sorted()
+    }
+
+    fun deleteLayout(context: Context, name: String) {
+        prefs(context).edit().remove("$KEY_CUSTOM_PREFIX$name").commit()
+    }
+}
+
+--------------------------------------------------------------------------------
+16.13  profiles/ControllerProfile.kt  (java/com/gamepad/controller/profiles/ControllerProfile.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.profiles
+
+/**
+ * Controller layout profiles for different game genres.
+ * Each profile controls which UI elements are visible.
+ */
+enum class ControllerProfile(
+    val displayName: String,
+    val showSticks: Boolean,
+    val showFaceButtons: Boolean,
+    val showTriggers: Boolean,
+    val showBumpers: Boolean,
+    val showCenterButtons: Boolean,
+    val showDpad: Boolean,
+    val showMotion: Boolean,
+    val description: String
+) {
+    XBOX_STANDARD(
+        displayName = "Xbox",
+        showSticks = true,
+        showFaceButtons = true,
+        showTriggers = true,
+        showBumpers = true,
+        showCenterButtons = true,
+        showDpad = true,
+        showMotion = false,
+        description = "Full Xbox 360 layout"
+    ),
+    RETRO_DPAD(
+        displayName = "Retro",
+        showSticks = false,
+        showFaceButtons = true,
+        showTriggers = false,
+        showBumpers = false,
+        showCenterButtons = true,
+        showDpad = true,
+        showMotion = false,
+        description = "D-Pad + face buttons only"
+    ),
+    FPS_MOTION(
+        displayName = "FPS",
+        showSticks = true,
+        showFaceButtons = true,
+        showTriggers = true,
+        showBumpers = true,
+        showCenterButtons = true,
+        showDpad = false,
+        showMotion = true,
+        description = "Right stick + gyro aiming"
+    ),
+    RACING(
+        displayName = "Race",
+        showSticks = true,
+        showFaceButtons = true,
+        showTriggers = true,
+        showBumpers = true,
+        showCenterButtons = false,
+        showDpad = false,
+        showMotion = true,
+        description = "Triggers + motion steering"
+    ),
+    CUSTOM(
+        displayName = "Custom",
+        showSticks = true,
+        showFaceButtons = true,
+        showTriggers = true,
+        showBumpers = true,
+        showCenterButtons = true,
+        showDpad = true,
+        showMotion = true,
+        description = "Everything enabled"
+    );
+
+    companion object {
+        fun next(current: ControllerProfile): ControllerProfile {
+            val values = entries
+            return values[(current.ordinal + 1) % values.size]
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+16.14  ui/screens/GamePadScreen.kt  (java/com/gamepad/controller/ui/screens/GamePadScreen.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.ui.screens
+
+import android.content.Context
+import android.util.DisplayMetrics
+import android.view.WindowManager
+import android.widget.Toast
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.gamepad.controller.layout.*
+import com.gamepad.controller.network.InputPacket
+import com.gamepad.controller.network.Protocol
+import com.gamepad.controller.profiles.ControllerProfile
+import com.gamepad.controller.ui.components.Haptics
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun GamePadScreen(
+    profile: ControllerProfile,
+    onPacketReady: (InputPacket) -> Unit,
+    playerSlot: Int,
+    serverName: String = ""
+) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+
+    // Get screen size in dp for layout positioning
+    val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    val metrics = DisplayMetrics()
+    @Suppress("DEPRECATION")
+    wm.defaultDisplay.getMetrics(metrics)
+    val screenW = metrics.widthPixels / density.density
+    val screenH = metrics.heightPixels / density.density
+
+    // State
+    var buttons by remember { mutableStateOf(0u) }
+    var leftX by remember { mutableFloatStateOf(0f) }
+    var leftY by remember { mutableFloatStateOf(0f) }
+    var rightX by remember { mutableFloatStateOf(0f) }
+    var rightY by remember { mutableFloatStateOf(0f) }
+    var leftTrigger by remember { mutableFloatStateOf(0f) }
+    var rightTrigger by remember { mutableFloatStateOf(0f) }
+    var fps by remember { mutableIntStateOf(0) }
+
+    // Layout editor state
+    var isEditMode by remember { mutableStateOf(false) }
+    var layout by remember { mutableStateOf(LayoutManager.loadCurrent(context)) }
+    var selectedButton by remember { mutableStateOf<String?>(null) }
+    var layoutDirty by remember { mutableStateOf(false) }
+    var toolbarExpanded by remember { mutableStateOf(false) }
+
+    // Input send loop
+    LaunchedEffect(Unit) {
+        var frames = 0
+        var lastFpsTime = System.currentTimeMillis()
+        while (true) {
+            withContext(Dispatchers.IO) {
+                onPacketReady(InputPacket(
+                    packetType = Protocol.PacketType.INPUT,
+                    buttons = buttons,
+                    leftX = (leftX * 32767).toInt().toShort(),
+                    leftY = (leftY * 32767).toInt().toShort(),
+                    rightX = (rightX * 32767).toInt().toShort(),
+                    rightY = (rightY * 32767).toInt().toShort(),
+                    leftTrigger = (leftTrigger * 255).toInt().toByte(),
+                    rightTrigger = (rightTrigger * 255).toInt().toByte()
+                ))
+            }
+            frames++
+            val now = System.currentTimeMillis()
+            if (now - lastFpsTime >= 1000) { fps = frames; frames = 0; lastFpsTime = now }
+            delay(8)
+        }
+    }
+
+    fun toggleButton(flag: UInt, pressed: Boolean) {
+        if (isEditMode) return
+        buttons = if (pressed) buttons or flag else buttons and flag.inv()
+    }
+
+    fun moveButton(id: String, dx: Float, dy: Float) {
+        layout = layout.copy(buttons = layout.buttons.map {
+            if (it.id == id) it.copy(
+                x = (it.x + dx).coerceIn(0.02f, 0.98f),
+                y = (it.y + dy).coerceIn(0.02f, 0.98f)
+            ) else it
+        })
+        layoutDirty = true
+    }
+
+    fun saveLayout() {
+        val ok = LayoutManager.saveCurrent(context, layout)
+        layoutDirty = false
+        Toast.makeText(context, if (ok) "Layout saved!" else "Save failed", Toast.LENGTH_SHORT).show()
+    }
+
+    Box(Modifier.fillMaxSize().background(Color(0xFF0D1117))) {
+
+        // === GAMEPAD CONTROLS ===
+        Box(Modifier.fillMaxSize()) {
+            layout.buttons.filter { it.visible && it.isVisibleIn(profile) }.forEach { btn ->
+                val posX = (btn.x * screenW).dp
+                val posY = (btn.y * screenH).dp
+
+                Box(modifier = Modifier.offset { IntOffset(with(density) { posX.roundToPx() }, with(density) { posY.roundToPx() }) }) {
+                    when (btn.type) {
+                        ButtonLayout.ElementType.STICK_LEFT -> EditableStick(
+                            btn, isEditMode, selectedButton == btn.id,
+                            onDrag = { dx, dy -> moveButton(btn.id, dx, dy) },
+                            onSelect = { selectedButton = btn.id },
+                            onXChanged = { leftX = it }, onYChanged = { leftY = it }
+                        )
+                        ButtonLayout.ElementType.STICK_RIGHT -> EditableStick(
+                            btn, isEditMode, selectedButton == btn.id,
+                            onDrag = { dx, dy -> moveButton(btn.id, dx, dy) },
+                            onSelect = { selectedButton = btn.id },
+                            onXChanged = { rightX = it }, onYChanged = { rightY = it }
+                        )
+                        ButtonLayout.ElementType.TRIGGER_L -> EditableTrigger(
+                            btn, isEditMode, selectedButton == btn.id,
+                            onDrag = { dx, dy -> moveButton(btn.id, dx, dy) },
+                            onSelect = { selectedButton = btn.id },
+                            value = leftTrigger, onValueChanged = { leftTrigger = it }
+                        )
+                        ButtonLayout.ElementType.TRIGGER_R -> EditableTrigger(
+                            btn, isEditMode, selectedButton == btn.id,
+                            onDrag = { dx, dy -> moveButton(btn.id, dx, dy) },
+                            onSelect = { selectedButton = btn.id },
+                            value = rightTrigger, onValueChanged = { rightTrigger = it }
+                        )
+                        else -> EditableButton(
+                            btn, isEditMode, selectedButton == btn.id,
+                            onDrag = { dx, dy -> moveButton(btn.id, dx, dy) },
+                            onSelect = { selectedButton = btn.id },
+                            onButtonChanged = { toggleButton(btn.buttonFlag, it) },
+                            isPressed = (buttons and btn.buttonFlag) != 0u
+                        )
+                    }
+                }
+            }
+        }
+
+        // === HUD ===
+        Row(Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("P${playerSlot + 1} . ${profile.displayName}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.4f))
+            Text("${fps}Hz", fontSize = 10.sp, color = Color(0xFF4CAF50).copy(alpha = 0.5f))
+        }
+
+        // === EDIT MODE TOOLBAR (collapsible) ===
+        AnimatedVisibility(visible = isEditMode,
+            enter = slideInVertically(initialOffsetY = { -it }),
+            exit = slideOutVertically(targetOffsetY = { -it }),
+            modifier = Modifier.align(Alignment.TopCenter)) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 36.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = Color(0xFF1A1F2E).copy(alpha = 0.95f), tonalElevation = 8.dp
+            ) {
+                Column(modifier = Modifier.padding(8.dp)) {
+                    // Header - always visible, tap to expand/collapse
+                    Row(modifier = Modifier.fillMaxWidth().clickable { toolbarExpanded = !toolbarExpanded },
+                        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("LAYOUT EDITOR", fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            color = Color(0xFF00E5FF), letterSpacing = 2.sp)
+                        Icon(
+                            if (toolbarExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                            contentDescription = "Toggle",
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    // Expanded content - only shows when toolbar is expanded
+                    AnimatedVisibility(visible = toolbarExpanded) {
+                        Column(modifier = Modifier.padding(top = 8.dp)) {
+                            val selected = layout.buttons.find { it.id == selectedButton }
+                            if (selected != null) {
+                                Text("${selected.type.name} - ${selected.label}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f))
+                                Spacer(Modifier.height(6.dp))
+                                Text("Size: ${selected.sizeDp}dp", fontSize = 10.sp, color = Color.White.copy(alpha = 0.5f))
+                                Slider(value = selected.sizeDp.toFloat(), onValueChange = { newSize ->
+                                    layout = layout.copy(buttons = layout.buttons.map {
+                                        if (it.id == selectedButton) it.copy(sizeDp = newSize.roundToInt()) else it
+                                    })
+                                    layoutDirty = true
+                                }, valueRange = 24f..160f, modifier = Modifier.fillMaxWidth(),
+                                    colors = SliderDefaults.colors(thumbColor = Color(0xFF00E5FF), activeTrackColor = Color(0xFF00E5FF)))
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                                    Text("Visible", fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f), modifier = Modifier.weight(1f))
+                                    Switch(checked = selected.visible, onCheckedChange = { vis ->
+                                        layout = layout.copy(buttons = layout.buttons.map {
+                                            if (it.id == selectedButton) it.copy(visible = vis) else it
+                                        })
+                                        layoutDirty = true
+                                    }, colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFF00E5FF), checkedTrackColor = Color(0xFF00E5FF).copy(alpha = 0.3f)))
+                                }
+                            } else {
+                                Text("Tap any control to select . Drag to move", fontSize = 11.sp, color = Color.White.copy(alpha = 0.5f))
+                            }
+
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { layout = defaultXboxLayout(); saveLayout() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF37474F)), modifier = Modifier.weight(1f)) {
+                                    Text("Reset", fontSize = 11.sp)
+                                }
+                                Button(onClick = { saveLayout(); isEditMode = false; selectedButton = null; toolbarExpanded = false },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)), modifier = Modifier.weight(1f)) {
+                                    Text("Save & Exit", fontSize = 11.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+                                Button(onClick = {
+                                    if (layoutDirty) {
+                                        layout = LayoutManager.loadCurrent(context)
+                                        Toast.makeText(context, "Changes discarded", Toast.LENGTH_SHORT).show()
+                                    }
+                                    isEditMode = false; selectedButton = null; toolbarExpanded = false
+                                },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)), modifier = Modifier.weight(1f)) {
+                                    Text("Cancel", fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // === EDIT TOGGLE FAB ===
+        Box(modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp)
+            .size(48.dp).shadow(8.dp, CircleShape).clip(CircleShape)
+            .background(if (isEditMode) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.15f))
+            .clickable {
+                Haptics.buttonPress(context)
+                isEditMode = !isEditMode
+                if (!isEditMode) { selectedButton = null; toolbarExpanded = false }
+                else { toolbarExpanded = false }
+            },
+            contentAlignment = Alignment.Center) {
+            Icon(if (isEditMode) Icons.Filled.Check else Icons.Filled.Edit,
+                contentDescription = null, tint = if (isEditMode) Color.Black else Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.size(24.dp))
+        }
+    }
+}
+
+// ====================================================
+// EDITABLE STICK - uses clickable for select, pointerInput for drag
+// ====================================================
+@Composable
+private fun EditableStick(
+    btn: ButtonLayout, isEditMode: Boolean, isSelected: Boolean,
+    onDrag: (Float, Float) -> Unit, onSelect: () -> Unit,
+    onXChanged: (Float) -> Unit, onYChanged: (Float) -> Unit
+) {
+    val ctx = LocalContext.current
+    val deadZone = 0.08f
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+    val size = btn.sizeDp
+    val maxR = size / 2f
+
+    Box(modifier = Modifier.size(size.dp)
+        .then(if (isSelected) Modifier.border(2.dp, Color(0xFF00E5FF), CircleShape) else Modifier)
+        .shadow(8.dp, CircleShape).clip(CircleShape).background(Color.White.copy(alpha = 0.08f))
+        .pointerInput(isEditMode) {
+            if (!isEditMode) {
+                detectDragGestures(
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        offsetX = (offsetX + dragAmount.x).coerceIn(-maxR, maxR)
+                        offsetY = (offsetY + dragAmount.y).coerceIn(-maxR, maxR)
+                        onXChanged((offsetX / maxR).let { if (abs(it) < deadZone) 0f else it })
+                        onYChanged((offsetY / maxR).let { if (abs(it) < deadZone) 0f else it })
+                    },
+                    onDragEnd = { offsetX = 0f; offsetY = 0f; onXChanged(0f); onYChanged(0f) },
+                    onDragCancel = { offsetX = 0f; offsetY = 0f; onXChanged(0f); onYChanged(0f) }
+                )
+            } else {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    onDrag(dragAmount.x / ctx.resources.displayMetrics.widthPixels,
+                        dragAmount.y / ctx.resources.displayMetrics.heightPixels)
+                }
+            }
+        }
+        .clickable(enabled = isEditMode) { onSelect() },
+        contentAlignment = Alignment.Center
+    ) {
+        if (!isEditMode) {
+            Box(modifier = Modifier.offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .size((size * 0.35f).dp).clip(CircleShape).background(Color.White.copy(alpha = 0.5f)))
+            Text(btn.label, color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp)
+        } else {
+            Icon(Icons.Filled.OpenWith, null, tint = Color(0xFF00E5FF).copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+// ====================================================
+// EDITABLE BUTTON - uses clickable for select, pointerInput for drag
+// ====================================================
+@Composable
+private fun EditableButton(
+    btn: ButtonLayout, isEditMode: Boolean, isSelected: Boolean,
+    onDrag: (Float, Float) -> Unit, onSelect: () -> Unit,
+    onButtonChanged: (Boolean) -> Unit, isPressed: Boolean
+) {
+    val context = LocalContext.current
+    val color = Color(btn.color)
+    val size = btn.sizeDp
+
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && !isEditMode) 0.85f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "s")
+
+    Box(modifier = Modifier.size(size.dp)
+        .graphicsLayer { scaleX = scale; scaleY = scale }
+        .then(if (isSelected) Modifier.border(2.dp, Color(0xFF00E5FF), CircleShape) else Modifier)
+        .shadow(if (isPressed) 2.dp else 6.dp, CircleShape).clip(CircleShape)
+        .background(if (isEditMode) color.copy(alpha = 0.4f) else if (isPressed) color else color.copy(alpha = 0.3f))
+        .pointerInput(isEditMode) {
+            if (!isEditMode) {
+                // No drag in normal mode
+            } else {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    onDrag(dragAmount.x / context.resources.displayMetrics.widthPixels,
+                        dragAmount.y / context.resources.displayMetrics.heightPixels)
+                }
+            }
+        }
+        .clickable(enabled = isEditMode) { onSelect() }
+        .pointerInput(isEditMode) {
+            if (!isEditMode) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    Haptics.buttonPress(context)
+                    onButtonChanged(true)
+                    waitForUpOrCancellation()
+                    onButtonChanged(false)
+                }
+            }
+        },
+        contentAlignment = Alignment.Center
+    ) {
+        if (isEditMode) {
+            Icon(Icons.Filled.OpenWith, null, tint = Color(0xFF00E5FF), modifier = Modifier.size((size * 0.35f).dp))
+        } else {
+            Text(btn.label, color = Color.White.copy(alpha = if (isPressed) 1f else 0.8f),
+                fontSize = (size * 0.3f).sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+// ====================================================
+// EDITABLE TRIGGER - uses clickable for select, pointerInput for drag
+// ====================================================
+@Composable
+private fun EditableTrigger(
+    btn: ButtonLayout, isEditMode: Boolean, isSelected: Boolean,
+    onDrag: (Float, Float) -> Unit, onSelect: () -> Unit,
+    value: Float, onValueChanged: (Float) -> Unit
+) {
+    val context = LocalContext.current
+    val size = btn.sizeDp
+    val widthDp = size * 2.2f
+    val heightDp = size * 0.75f
+
+    Box(modifier = Modifier.width(widthDp.dp).height(heightDp.dp)
+        .then(if (isSelected) Modifier.border(2.dp, Color(0xFF00E5FF), RoundedCornerShape(10.dp)) else Modifier)
+        .clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.10f))
+        .pointerInput(isEditMode) {
+            if (!isEditMode) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    onValueChanged((value + dragAmount.x / widthDp).coerceIn(0f, 1f))
+                }
+            } else {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    onDrag(dragAmount.x / context.resources.displayMetrics.widthPixels,
+                        dragAmount.y / context.resources.displayMetrics.heightPixels)
+                }
+            }
+        }
+        .clickable(enabled = isEditMode) { onSelect() }
+    ) {
+        Box(modifier = Modifier.align(Alignment.CenterStart).fillMaxHeight()
+            .fillMaxWidth(value.coerceIn(0.01f, 1f))
+            .clip(RoundedCornerShape(10.dp)).background(Color(0xFF00E5FF).copy(alpha = 0.45f)))
+        if (isEditMode) Icon(Icons.Filled.OpenWith, null, tint = Color(0xFF00E5FF),
+            modifier = Modifier.align(Alignment.Center).size(16.dp))
+        else Text(btn.label, color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp,
+            fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
+    }
+}
+
+--------------------------------------------------------------------------------
+16.15  ui/screens/ConnectionScreen.kt  (java/com/gamepad/controller/ui/screens/ConnectionScreen.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.ui.screens
+
+import androidx.compose.animation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.gamepad.controller.profiles.ControllerProfile
+
+@Composable
+fun ConnectionScreen(
+    isConnected: Boolean,
+    serverName: String,
+    playerSlot: Int,
+    currentProfile: ControllerProfile,
+    isDiscovering: Boolean,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    onProfileChange: (ControllerProfile) -> Unit,
+    onManualConnect: (String) -> Unit
+) {
+    var showManualInput by remember { mutableStateOf(false) }
+    var manualIp by remember { mutableStateOf("") }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF0D1117))
+            .padding(24.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("GamePad Controller", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Spacer(Modifier.height(4.dp))
+            Text("Offline Multiplayer Virtual Gamepad", fontSize = 14.sp, color = Color.White.copy(alpha = 0.45f))
+            Spacer(Modifier.height(32.dp))
+
+            // Status Card
+            Card(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.05f))
+            ) {
+                Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (isConnected) {
+                        Icon(Icons.Filled.CheckCircle, null, tint = Color(0xFF4CAF50), modifier = Modifier.size(48.dp))
+                        Spacer(Modifier.height(12.dp))
+                        Text("Connected", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
+                        Text(serverName, fontSize = 14.sp, color = Color.White.copy(alpha = 0.7f))
+                        Text("Player ${playerSlot + 1}", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                        Spacer(Modifier.height(16.dp))
+                        Button(onDisconnect, Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935))) {
+                            Icon(Icons.Filled.LinkOff, null); Spacer(Modifier.width(8.dp)); Text("Disconnect")
+                        }
+                    } else {
+                        if (isDiscovering) {
+                            CircularProgressIndicator(Modifier.size(24.dp), color = Color(0xFFFFC107), strokeWidth = 2.dp)
+                            Spacer(Modifier.height(8.dp))
+                            Text("Searching for server...", fontSize = 14.sp, color = Color.White.copy(alpha = 0.7f),
+                                textAlign = TextAlign.Center)
+                        } else {
+                            Icon(Icons.Filled.WifiFind, null, tint = Color(0xFFFFC107), modifier = Modifier.size(48.dp))
+                            Spacer(Modifier.height(12.dp))
+                            Text("No server found", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = Color(0xFFFFC107))
+                            Text("Make sure PC hotspot is ON and phone is connected to it.\nDo NOT use phone hotspot - it blocks device communication.", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f),
+                                textAlign = TextAlign.Center)
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        Button(onConnect, Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))) {
+                            Icon(Icons.Filled.Refresh, null); Spacer(Modifier.width(8.dp)); Text("Scan Again")
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(onClick = { showManualInput = !showManualInput }) { Text("Manual IP Entry") }
+                        AnimatedVisibility(visible = showManualInput) {
+                            Column(Modifier.fillMaxWidth()) {
+                                OutlinedTextField(
+                                    manualIp,
+                                    { manualIp = it },
+                                    Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    placeholder = { Text("e.g. 192.168.58.165") },
+                                    label = { Text("Server IP Address") },
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color(0xFF2196F3),
+                                        unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White,
+                                        focusedLabelColor = Color(0xFF2196F3),
+                                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f)
+                                    )
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Button(
+                                    onClick = { if (manualIp.isNotBlank()) onManualConnect(manualIp) },
+                                    Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3))
+                                ) { Text("Connect") }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // Profile Selector
+            Text("Controller Profile", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.7f))
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                ControllerProfile.entries.forEach { profile ->
+                    val selected = profile == currentProfile
+                    Box(
+                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
+                            .background(if (selected) Color(0xFF2196F3) else Color.White.copy(alpha = 0.08f))
+                            .clickable { onProfileChange(profile) }
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(profile.displayName, fontSize = 11.sp, color = Color.White, textAlign = TextAlign.Center,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // Quick Start
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.03f))) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Quick Start", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
+                    Spacer(Modifier.height(6.dp))
+                    listOf(
+                        "1" to "Run GamePadServer.exe on your PC (elevated)",
+                        "2" to "Server auto-creates the GamePad_Server hotspot",
+                        "3" to "On this phone: connect to GamePad_Server WiFi (gamepad123)",
+                        "4" to "Tap Scan - auto-discovery handles the rest",
+                        "5" to "Connect more phones for multiplayer"
+                    ).forEach { (n, t) ->
+                        Row(Modifier.padding(vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(n, fontSize = 12.sp, color = Color(0xFF2196F3), fontWeight = FontWeight.Bold, modifier = Modifier.width(18.dp))
+                            Text(t, fontSize = 12.sp, color = Color.White.copy(alpha = 0.55f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+--------------------------------------------------------------------------------
+16.16  ui/components/Components.kt  (java/com/gamepad/controller/ui/components/Components.kt)
+--------------------------------------------------------------------------------
+
+package com.gamepad.controller.ui.components
+
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropUp
+import androidx.compose.material.icons.automirrored.filled.ArrowLeft
+import androidx.compose.material.icons.automirrored.filled.ArrowRight
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+// -----------------------------------------------------
+//  HAPTIC FEEDBACK
+// -----------------------------------------------------
+
+object Haptics {
+    private fun getVibrator(context: android.content.Context): Vibrator {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vm = context.getSystemService(android.content.Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vm.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as Vibrator
+        }
+    }
+
+    fun lightTap(context: android.content.Context) {
+        getVibrator(context).vibrate(VibrationEffect.createOneShot(10, 40))
+    }
+
+    fun buttonPress(context: android.content.Context) {
+        getVibrator(context).vibrate(VibrationEffect.createOneShot(20, 80))
+    }
+}
+
+// -----------------------------------------------------
+//  TOUCH BUTTON
+// -----------------------------------------------------
+
+@Composable
+fun TouchButton(
+    icon: ImageVector,
+    label: String,
+    isPressed: Boolean,
+    onButtonChanged: (Boolean) -> Unit,
+    size: Int = 56,
+    color: Color = MaterialTheme.colorScheme.primary
+) {
+    val context = LocalContext.current
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.85f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "scale"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(size.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .shadow(if (isPressed) 2.dp else 6.dp, CircleShape)
+            .clip(CircleShape)
+            .background(if (isPressed) color else color.copy(alpha = 0.3f))
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        Haptics.buttonPress(context)
+                        onButtonChanged(true)
+                        tryAwaitRelease()
+                        onButtonChanged(false)
+                    }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (isPressed) Color.White else Color.White.copy(alpha = 0.8f),
+            modifier = Modifier.size((size * 0.4).dp)
+        )
+    }
+}
+
+// -----------------------------------------------------
+//  ANALOG STICK
+// -----------------------------------------------------
+
+@Composable
+fun AnalogStick(
+    onXChanged: (Float) -> Unit,
+    onYChanged: (Float) -> Unit,
+    label: String = "L",
+    size: Int = 120,
+    modifier: Modifier = Modifier
+) {
+    val deadZone = 0.08f
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+
+    Box(
+        modifier = modifier
+            .size(size.dp)
+            .shadow(8.dp, CircleShape)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.08f))
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        val maxRadius = size / 2f
+                        offsetX = (offsetX + dragAmount.x).coerceIn(-maxRadius, maxRadius)
+                        offsetY = (offsetY + dragAmount.y).coerceIn(-maxRadius, maxRadius)
+                        val nx = (offsetX / maxRadius).let { if (abs(it) < deadZone) 0f else it }
+                        val ny = (offsetY / maxRadius).let { if (abs(it) < deadZone) 0f else it }
+                        onXChanged(nx)
+                        onYChanged(ny)
+                    },
+                    onDragEnd = { offsetX = 0f; offsetY = 0f; onXChanged(0f); onYChanged(0f) },
+                    onDragCancel = { offsetX = 0f; offsetY = 0f; onXChanged(0f); onYChanged(0f) }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .size(44.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.5f))
+        )
+        Text(label, color = Color.White.copy(alpha = 0.25f), fontSize = 14.sp)
+    }
+}
+
+// -----------------------------------------------------
+//  D-PAD - proper cross layout with separated touch zones
+// -----------------------------------------------------
+
+@Composable
+fun DPad(
+    onUp: (Boolean) -> Unit,
+    onDown: (Boolean) -> Unit,
+    onLeft: (Boolean) -> Unit,
+    onRight: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val ctx = LocalContext.current
+    // Each arm: 50dp wide, 44dp tall (or 44dp wide, 50dp tall for vertical)
+    // Total: ~140dp x 140dp
+    val armW = 50
+    val armH = 44
+    val totalSize = 140
+
+    Box(modifier = modifier.size(totalSize.dp), contentAlignment = Alignment.Center) {
+        // Center disc
+        Box(modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.12f)))
+
+        // Up arm
+        Box(modifier = Modifier.align(Alignment.TopCenter)) {
+            TouchButton(Icons.Filled.ArrowDropUp, "", false, {
+                Haptics.lightTap(ctx); onUp(it)
+            }, armH)
+        }
+        // Down arm
+        Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+            TouchButton(Icons.Filled.ArrowDropDown, "", false, {
+                Haptics.lightTap(ctx); onDown(it)
+            }, armH)
+        }
+        // Left arm
+        Box(modifier = Modifier.align(Alignment.CenterStart)) {
+            TouchButton(Icons.AutoMirrored.Filled.ArrowLeft, "", false, {
+                Haptics.lightTap(ctx); onLeft(it)
+            }, armW)
+        }
+        // Right arm
+        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+            TouchButton(Icons.AutoMirrored.Filled.ArrowRight, "", false, {
+                Haptics.lightTap(ctx); onRight(it)
+            }, armW)
+        }
+    }
+}
+
+// -----------------------------------------------------
+//  TRIGGER SLIDER
+// -----------------------------------------------------
+
+@Composable
+fun TriggerSlider(
+    value: Float,
+    onValueChanged: (Float) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .width(32.dp)
+            .height(100.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White.copy(alpha = 0.08f))
+            .pointerInput(Unit) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    onValueChanged((value - dragAmount.y / size.height).coerceIn(0f, 1f))
+                }
+            }
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .fillMaxHeight(value.coerceIn(0.01f, 1f))
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.White.copy(alpha = 0.4f))
+        )
+        Text(label, color = Color.White.copy(alpha = 0.35f), fontSize = 10.sp,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp))
+    }
+}
+
+================================================================================
+17. BUG / FAILURE ANALYSIS (v1.1.0 -> v1.1.1 changes)
+================================================================================
+
+  The APK this report documents is v1.1.1 (versionCode 3). It is the second
+  APK the repo has shipped (v1.1.0 = versionCode 2 was the first CI-built
+  APK; v1.0.0 = versionCode 1 was a debug build that was never released).
+
+  Fixes and changes applied for v1.1.1:
+
+  F1. Layout editor feature (the big one)
+      GamePadScreen.kt was rewritten around an editable layout: tap to select,
+      drag to move (normalized by screen pixels), size slider (24-160 dp),
+      visible switch, Reset / Save & Exit / Cancel. Persistence via
+      LayoutManager with commit() (was apply() before - apply() could lose
+      edits if the process died before flush).
+      Gesture fix: in early editor builds the drag gesture intercepted tap
+      selection. The final design uses separate pointerInput blocks - one for
+      press/release input in play mode, one for drag-to-move in edit mode -
+      and clickable(enabled = isEditMode) for selection, so the two never
+      conflict.
+
+  F2. Toolbar overlap fix
+      The edit toolbar originally sat over the top buttons. It is now a
+      collapsible panel (tap header to expand) that slides in from the top
+      and stays out of the play area.
+
+  F3. L3/R3 added to the default layout
+      defaultXboxLayout() now ships 17 controls including STICK_CLICK_L/R.
+      ensureStickClicks() migrates old persisted layouts by injecting L3/R3
+      without touching user positions.
+
+  F4. Heartbeat margin
+      Heartbeat interval reduced to 1200 ms (was 2000 ms) to sit comfortably
+      inside the server's 2000 ms disconnect timeout.
+
+  F5. Quick Start text corrected
+      The onboarding steps were rewritten: the server auto-creates the
+      GamePad_Server hotspot, so the PC-side "turn on Mobile Hotspot" step was
+      removed and replaced with the actual order (run server elevated, it
+      creates the hotspot, join WiFi, tap Scan).
+
+  F6. Lint disabled on release builds
+      lint { checkReleaseBuilds = false; abortOnError = false } so CI never
+      fails on advisory lint warnings.
+
+  F7. Build version bump
+      versionCode 3 / versionName 1.1.1 in build.gradle.kts.
+
+  F8. CI hardening (repo-level, affects this APK's build):
+      - client/gradlew (Unix) was missing from the repo - only gradlew.bat was
+        committed, so the Ubuntu CI runner failed with "./gradlew: No such file
+        or directory". Fixed by regenerating the wrapper (committed gradlew).
+      - The committed gradlew initially had no executable bit (created on
+        Windows), causing "Permission denied" (exit 126) on the runner. Fixed
+        with git update-index --chmod=+x client/gradlew.
+      These two CI fixes are exactly why the tag v1.1.1 had to be re-pointed
+      from 3b3e395 -> 596ee1c -> 5cf3d5e before the release build succeeded.
+
+  Known minor issues (not fixed, documented):
+  - getMotionAxis() (accelerometer tilt steering) is dead code - implemented
+    but never wired to any axis.
+  - sensitivity has no UI.
+  - HIGH_SAMPLING_RATE_SENSORS is declared but unused at SENSOR_DELAY_GAME.
+  - Release APK is signed with the DEBUG keystore (no release key yet).
+  - Layout editor has no per-name save (single "Xbox" layout is edited in
+    place) and no button-color editor.
+  - No vibration/rumble feedback from the server (ViGEm force feedback not
+    wired on either side).
+
+================================================================================
+18. HOW TO BUILD FROM SOURCE
+================================================================================
+
+  Prereq: JDK 17 + Android SDK (compileSdk 35). local.properties must point
+  android.sdk.path at the SDK (e.g. C:\Users\yaleed\AppData\Local\Android\Sdk).
+
+  cd client
+  ./gradlew.bat :app:assembleRelease          # Windows
+  ./gradlew :app:assembleRelease --no-daemon  # Unix / CI
+
+  Output: client/app/build/outputs/apk/release/app-release.apk (~1 MB)
+
+  Debug build: ./gradlew :app:assembleDebug  -> applicationId gains the
+  .debug suffix (com.gamepad.controller.debug) so debug and release CANNOT
+  coexist on one phone.
+
+================================================================================
+19. HOW TO INSTALL & USE
+================================================================================
+
+  1. On the PC, run GamePadServer.exe (elevated) - it creates the
+     "GamePad_Server" WiFi hotspot (password gamepad123).
+  2. On the phone, sideload GamePadController-v1.1.1.apk
+     (Settings > Security > "Install unknown apps" as needed).
+  3. Join the GamePad_Server WiFi from the phone.
+  4. Open the app - it auto-discovers the server (UDP 9878) and streams input
+     over UDP 9876.
+  5. Pick a profile (Xbox / Retro / FPS / Race / Custom). Tap the pencil FAB
+     to edit the layout (drag to move, resize, hide/show, Save & Exit).
+  6. Up to 8 phones can play at once; each is assigned a player slot.
+
+  The DEBUG-signed APK installs like any sideloaded app (no Play Store
+  signature requirement). No permissions need to be granted at runtime - all
+  declared permissions are normal-level and auto-granted at install time.
+
+================================================================================
+20. KNOWN LIMITATIONS & FUTURE WORK
+================================================================================
+
+  - Debug keystore signing: replace with a real keystore before any Play Store
+    or public distribution.
+  - Server does not yet apply the gyro fields to the virtual controller
+    (client streams them; mapping is future work).
+  - No TPC 9877 usage - the TCP channel is reserved/unused.
+  - No encryption/auth on the UDP wire (fine for trusted LANs).
+  - Layout editor: single editable layout, no color picker, no per-name save.
+  - Motion sensitivity not adjustable from the UI.
+  - No force-feedback / rumble.
+  - Retro/FPS/Race profiles only hide controls - they do not remap buttons.
+
+================================================================================
+21. GITHUB CI/CD INTEGRATION
+================================================================================
+
+  Release workflow (.github/workflows/release.yml), triggered by a v* tag:
+
+    build-android (ubuntu-latest):
+      checkout -> setup-java 17 (Temurin) -> android-actions/setup-android ->
+      gradle/actions/setup-gradle v4 -> ./gradlew :app:assembleRelease
+      --no-daemon (working-directory: client) -> cp app-release.apk to
+      GamePadController-<tag>.apk -> upload-artifact
+
+    build-server (windows-latest):
+      dotnet publish -> zip -> upload-artifact
+
+    release (needs both):
+      download-artifact both -> softprops/action-gh-release v2 attaches
+      GamePadServer-*.zip and GamePadController-*.apk, generate_release_notes.
+
+  Permissions: contents: write (release creation).
+
+  History of CI results relevant to this APK:
+    v1.1.0 run  (15496b4)      FAILED  - ./gradlew: No such file or directory
+    v1.1.1 run  (3b3e395)      FAILED  - same missing-gradlew error
+    v1.1.1 run  (596ee1c)      FAILED  - Permission denied (gradlew not +x)
+    v1.1.1 run  (5cf3d5e)      SUCCESS - release v1.1.1 published
+    run 30694210361 (final)    SUCCESS
+
+================================================================================
+22. RELATED FILES & LOCATIONS
+================================================================================
+
+  APK (release)      : D:\release\GamePadController-v1.1.1.apk
+  APK (on GitHub)    : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
+  Client source      : D:\GamePadEcosystem\GamePadEcosystem\client\
+                       (NTFS junction -> D:\OpenCode Projects\Development\
+                        GamePadEcosystem\GamePadEcosystem\client\)
+  Server report      : D:\release\gamepadserverdetails.txt
+  Protocol spec      : repo\shared\protocol\PROTOCOL.md
+  Server exe         : D:\release\GamePadServer.exe (v1.1.0+146ab46)
+  GitHub repo        : https://github.com/yaleedhaque/GamePadEcosystem
+
+  Git commit at build: 5cf3d5e (tag v1.1.1) - main branch.
+
+================================================================================
+END OF REPORT
