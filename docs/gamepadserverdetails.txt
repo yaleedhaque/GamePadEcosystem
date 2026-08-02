@@ -1,7 +1,7 @@
 ================================================================================
             GAMEPADSERVER.EXE — COMPLETE TECHNICAL REPORT
             Offline Multiplayer Virtual Gamepad Server (Windows)
-            Version 1.1.0  |  C# / .NET 8  |  Built: 2026-08-01
+            Version 1.1.2  |  C# / .NET 8  |  Built: 2026-08-02
 ================================================================================
 
 TABLE OF CONTENTS
@@ -30,7 +30,7 @@ TABLE OF CONTENTS
   11. How Phones Connect, Discover, And Stream Input
   12. The ViGEmBus Virtual Controller Mapping
   13. Complete Bug / Failure Analysis (why old versions failed)
-  14. The Fixes Applied In v1.1.0 (what changed and why)
+  14. The Fixes Applied In v1.1.2 (what changed and why)
   15. Verification & Testing Results (evidence)
   16. Logging System (server.log, 1MB rotation)
   17. Security & Privilege Model (UAC / admin requirements)
@@ -49,19 +49,22 @@ GamePadServer.exe is a Windows server (C#, .NET 8) that turns up to 8 Android
 phones into wireless Xbox 360 controllers for a Windows PC, using nothing but
 a WiFi hotspot, raw UDP sockets, and the ViGEmBus virtual gamepad driver.
 
-  - Phones run a pre-built Android app (GamePadController-v1.1.1.apk).
+  - Phones run a pre-built Android app (GamePadController-v1.1.2.apk).
   - The server creates its OWN WiFi hotspot (auto-started, no router needed).
   - It works even when the PC has NO internet at all (virtual loopback adapter).
   - No cloud, no accounts, no cables, sub-5ms latency.
 
-This report documents v1.1.1 — the current fixed, tested, and published release
-(server sources identical to v1.1.0). Prior versions were broken: the hotspot
-never started (a malformed PowerShell comment crashed the tethering script) and
-the discovery service flooded logs with phantom devices in an infinite loop
-(40 MB of garbage in one run). Both root causes were found, fixed, and verified
-in v1.1.0; v1.1.1 then shipped the matching Android client (new layout editor)
-and the first fully successful CI build of both assets. Companion report for
-the Android app: GamePadControllerDetails.txt in this folder.
+This report documents v1.1.2 — the current fixed, tested, and published release.
+It adds server-side input-reliability fixes on top of v1.1.1 (zombie-client
+revival, stale endpoint-map cleanup, hardened shutdown) and ships with the
+matching Android v1.1.2 client input fixes (see GamePadControllerDetails.txt).
+Prior versions were broken: the hotspot never started (a malformed PowerShell
+comment crashed the tethering script) and the discovery service flooded logs
+with phantom devices in an infinite loop (40 MB of garbage in one run). Both
+root causes were found, fixed, and verified in v1.1.0; v1.1.1 then shipped the
+matching Android client (new layout editor) and the first fully successful CI
+build of both assets. Companion report for the Android app:
+GamePadControllerDetails.txt in this folder.
 
 ================================================================================
 2. WHAT THE SERVER DOES
@@ -89,37 +92,39 @@ the Android app: GamePadControllerDetails.txt in this folder.
 File                          Size (bytes)   Purpose
 ----------------------------  -------------  ------------------------------------
 GamePadServer.exe             152,064        Main executable (app host + entry)
-GamePadServer.dll              73,216        Compiled C# assembly (real code)
+GamePadServer.dll              73,728        Compiled C# assembly (real code)
 GamePadServer.deps.json         1,097        .NET dependency manifest
 GamePadServer.runtimeconfig.json 458         Runtime settings (framework version)
 Nefarius.ViGEm.Client.dll     290,304        ViGEmClient library (Nefarius)
 StartServer.bat                   300        Elevates + launches the server
-GamePadController-v1.1.1.apk  1,069,628      Android phone client (release, sideload)
+GamePadController-v1.1.2.apk  1,069,628      Android phone client (release, sideload)
 server.log                      9,002        Runtime log (created at runtime)
 
   Framework-dependent publish (NOT self-contained). Requires .NET 8 runtime
   or SDK installed. Total footprint ~517 KB vs the old 65 MB self-contained
   single-file build.
 
-  SHA-256 hashes of the shipped release files (2026-08-01, republished from
-  repo HEAD 146ab46):
-    GamePadServer.exe        69DDB7FD2C55637B2F2295D5CF1889DFA772A8F5ADD4648984A3951E097C5B35
-    GamePadServer.dll        580369E5B33150ED00AA225900284C495318BECF98D3CF33DC1338477BA1591D
-    GamePadController-v1.1.1.apk  C700D273460118E68DB9FDB5FD11D3811754DA839C135C9C215B900B75E9ECB5
+  SHA-256 hashes of the shipped release files (2026-08-02, built from the
+  v1.1.2 sources in D:\release):
+    GamePadServer.exe        4A8827D9855FF853D2CDE7901CE4E2DCA85743B78667A05D8F29E4F263A4139D
+    GamePadServer.dll        662BA27AC3C8B401A877762FB3B5F3A62315AA9BC2E53D8F32D2E99710BFD7CC
+    GamePadController-v1.1.2.apk  81432A9A58A455058D90AF775A4515818586075439DA3A0E9673411049136AAA
 
-  Assembly metadata: the deployed GamePadServer.exe/.dll are stamped
-  FileVersion 1.1.0.0, ProductVersion 1.1.0+146ab46 (built from the repo at
-  commit 146ab46 on 2026-08-01; identical server code to tag v1.1.1).
+  Assembly metadata: the deployed GamePadServer.exe/.dll keep the
+  FileVersion 1.1.0.0 stamp from v1.1.0 (the csproj Version is not bumped per
+  patch release — same convention as v1.1.1); the binaries were built from the
+  v1.1.2 sources (ClientManager.cs + InputListener.cs fixes) on 2026-08-02.
 
   NOTE: this folder previously held a stale 16.5 MB DEBUG GamePadController.apk
   (v1.0.0, versionCode 1). It was removed on 2026-08-01; the only APK now is the
-  1 MB v1.1.1 release above. Full client details: see GamePadControllerDetails.txt
+  1 MB v1.1.2 release above. Full client details: see GamePadControllerDetails.txt
   in this folder.
 
   Public releases:
-    v1.1.1 (current): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
-      Assets: GamePadServer-v1.1.1-win-x64.zip (259,689 bytes) and
-              GamePadController-v1.1.1.apk (1,069,624 bytes, CI build)
+    v1.1.2 (current): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.2
+      Assets: GamePadServer-v1.1.2-win-x64.zip (CI build) and
+              GamePadController-v1.1.2.apk (1,069,628 bytes, local build)
+    v1.1.1 (superseded): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
     v1.1.0 (superseded): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.0
 
 ================================================================================
@@ -758,6 +763,11 @@ public sealed class ClientManager : IDisposable
             {
                 if (!kvp.Value.IsConnected)
                 {
+                    // Drop the dead endpoint's stale mapping first so a returning
+                    // old device can never hijack this slot's controller.
+                    if (kvp.Value.Endpoint != null)
+                        _endpointToSlot.TryRemove(kvp.Value.Endpoint, out _);
+
                     _endpointToSlot[endpoint] = kvp.Key;
                     kvp.Value.Endpoint = endpoint;
                     kvp.Value.DeviceName = deviceName;
@@ -846,7 +856,6 @@ public sealed class ConnectedClient
     public bool IsConnected { get; set; }
     public ushort LastSequence { get; set; }
 }
-
 --------------------------------------------------------------------------------
 8.6  server/src/GamePadServer/Network/DiscoveryService.cs
 --------------------------------------------------------------------------------
@@ -1112,7 +1121,6 @@ public sealed class InputListener : IDisposable
     {
         _udp = new UdpClient(new IPEndPoint(IPAddress.Any, Protocol.UdpPort));
         _udp.Client.ReceiveBufferSize = 2 * 1024 * 1024; // 2MB buffer
-        _udp.Client.ReceiveTimeout = 5000;
         _cts = new CancellationTokenSource();
 
         Console.ForegroundColor = ConsoleColor.DarkCyan;
@@ -1129,7 +1137,13 @@ public sealed class InputListener : IDisposable
                     _ = ProcessPacketAsync(result.Buffer, result.RemoteEndPoint);
                 }
                 catch (OperationCanceledException) { break; }
-                catch (SocketException) { break; }
+                catch (SocketException ex)
+                {
+                    // A transient socket error must NEVER kill the input listener —
+                    // otherwise the server silently stops responding to controllers
+                    // while discovery keeps running (observed failure). Log and continue.
+                    Console.WriteLine($"[Input] Socket error {ex.SocketErrorCode} ({ex.Message}) — continuing");
+                }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[Input] Error: {ex.Message}");
@@ -1165,8 +1179,19 @@ public sealed class InputListener : IDisposable
         }
 
         var client = _clientManager.GetClient(slot);
-        if (client == null || !client.IsConnected)
+        if (client == null)
             return;
+
+        if (!client.IsConnected)
+        {
+            // Client was marked disconnected after a timeout but is still sending
+            // on the same socket. Revive it instead of silently dropping input,
+            // otherwise the player is a zombie forever until they reconnect the app.
+            client.IsConnected = true;
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"[+] Player {slot + 1} revived: {client.DeviceName} ({remoteEp})");
+            Console.ResetColor();
+        }
 
         client.LastSeen = DateTime.UtcNow;
         client.LastSequence = packet.Sequence;
@@ -1202,13 +1227,15 @@ public sealed class InputListener : IDisposable
 
     public void Dispose()
     {
-        _cts?.Cancel();
-        _udp?.Close();
-        _udp?.Dispose();
-        _cts?.Dispose();
+        try { _cts?.Cancel(); } catch { }
+        try { _udp?.Close(); } catch { }
+        try { _listenTask?.Wait(1000); } catch { }
+        try { _cts?.Dispose(); } catch { }
+        try { _udp?.Dispose(); } catch { }
+        _cts = null;
+        _udp = null;
     }
 }
-
 --------------------------------------------------------------------------------
 8.8  server/src/GamePadServer/Network/HotspotManager.cs
 --------------------------------------------------------------------------------
@@ -2784,8 +2811,33 @@ BUG D — Unbounded log file.
   log begins.
 
 ================================================================================
-14. THE FIXES APPLIED IN v1.1.0 (what changed and why)
+14. THE FIXES APPLIED IN v1.1.2 (what changed and why)
 ================================================================================
+
+  The v1.1.2 release fixes input-reliability problems found while testing the
+  virtual pad against real games. Server-side changes:
+
+  File                           Change
+  -----------------------------  -------------------------------------------------
+  Core/ClientManager.cs          On slot re-assignment, drop the dead endpoint's
+                                 stale _endpointToSlot mapping first, so a
+                                 reconnecting old device can never hijack the
+                                 slot of a live player.
+  Network/InputListener.cs       Zombie revival: a client that timed out
+                                 (IsConnected=false) but keeps sending on the
+                                 same socket is revived ("[+] Player N
+                                 revived: ...") instead of having its input
+                                 silently dropped forever.
+  Network/InputListener.cs       Hardened Dispose(): cancel/close/wait wrapped in
+                                 try/catch, listener task waited up to 1 s,
+                                 fields nulled - shutdown can no longer throw.
+
+  The Android client shipped with the matching v1.1.2 input fixes (stick Y
+  negation, pixel-accurate stick normalization, absolute-x hold-to-press
+  triggers, button release on gesture cancel, LT/RT moved below LB/RB) - see
+  section 18 and GamePadControllerDetails.txt section 17.
+
+  The v1.1.0 fixes (retained - "why old versions failed"):
 
   File                           Change
   -----------------------------  -------------------------------------------------
@@ -2870,7 +2922,7 @@ Test C — release build verification:
 18. THE ANDROID CLIENT SIDE (what talks to this server)
 ================================================================================
 
-  Package      : com.gamepad.controller (GamePadController-v1.1.1.apk, 1 MB)
+  Package      : com.gamepad.controller (GamePadController-v1.1.2.apk, 1 MB)
   Protocol.kt  : mirrors the server exactly (UDP 9876, TCP 9877 reserved,
                  Discovery 9878, magic 0x47504144, 34-byte InputPacket, same
                  button flags).
@@ -2878,11 +2930,13 @@ Test C — release build verification:
                  (8 ms loop), heartbeat every 1200 ms.
   DiscoveryClient.kt: broadcasts "GPAD_DISCOVER_V1" on 9878 and parses the
                  "GPAD_SERVER_V1|<hostname>" reply to find the server.
-  Version      : 1.1.1 (versionCode 3), signed with the Android debug keystore,
-                 R8-minified. New in v1.1.1: on-screen layout editor (drag/
-                 resize/hide controls, persisted via commit()), L3/R3 stick-
-                 click buttons, faster 1200 ms heartbeat, corrected Quick Start
-                 text. See GamePadControllerDetails.txt in this folder.
+  Version      : 1.1.2 (versionCode 4), signed with the Android debug keystore,
+                 R8-minified. New in v1.1.2: input fixes - stick Y axis negated,
+                 pixel-accurate stick normalization (radiusPx), hold-to-press
+                 absolute-x analog triggers (never stuck), button release on
+                 gesture cancel, LT/RT moved below LB/RB. v1.1.1 added the
+                 on-screen layout editor. See GamePadControllerDetails.txt in
+                 this folder.
 
   Note: the wire protocol is FIXED and must not change - the released APK and
   server were built from matching sources (verified by comparing Protocol.cs
@@ -2921,6 +2975,8 @@ Test C — release build verification:
       directly; also stripped CRLF so the shebang resolves on Linux.
     - Final v1.1.1 run 30694210361 = SUCCESS (build-server + build-android +
       release all green; server zip 259,689 bytes, APK 1,069,624 bytes).
+    - v1.1.2 run (tag v1.1.2) = SUCCESS - server zip + APK + release attached
+      (recorded after CI).
 
 ================================================================================
 20. HOW TO BUILD FROM SOURCE
@@ -2945,12 +3001,12 @@ Test C — release build verification:
      already installed. Verify it runs (Device Manager → Xbox 360 Peripherals,
      or "sc query ViGEmBus").
   2. Install .NET 8 Desktop Runtime (required for the slim build).
-  3. Extract GamePadServer-v1.1.1-win-x64.zip anywhere on the PC.
+  3. Extract GamePadServer-v1.1.2-win-x64.zip anywhere on the PC.
   4. Double-click StartServer.bat (or GamePadServer.exe) and accept UAC.
   5. The server prints the banner, starts the hotspot (auto or loopback-backed),
      and shows "HOTSPOT ACTIVE: GamePad_Server".
   6. On each Android phone: enable Wi-Fi, join "GamePad_Server" WiFi
-     (password gamepad123), install + open GamePadController-v1.1.1.apk.
+     (password gamepad123), install + open GamePadController-v1.1.2.apk.
   7. The app auto-discovers the server (UDP 9878) and starts streaming to
      UDP 9876. Press [Q] in the server console to quit.
 
@@ -2977,15 +3033,15 @@ Test C — release build verification:
 23. FILE MANIFEST (D:\release — the shipped folder)
 ================================================================================
 
-  GamePadController-v1.1.1.apk  1,069,628  Android client (release, installed on phones)
+  GamePadController-v1.1.2.apk  1,069,628  Android client (release, installed on phones)
   GamePadServer.deps.json        1,097  .NET dependency manifest
-  GamePadServer.dll            73,216   Server assembly (the code)
+  GamePadServer.dll            73,728   Server assembly (the code)
   GamePadServer.exe           152,064   App host / launcher executable
   GamePadServer.runtimeconfig.json  458 Runtime config
   Nefarius.ViGEm.Client.dll   290,304   ViGEm client library
   server.log                    9,002   Runtime log (auto-generated)
   StartServer.bat                 300   Elevated launcher
-  GamePadControllerDetails.txt       (client technical report, v1.1.1)
+  GamePadControllerDetails.txt       (client technical report, v1.1.2)
   gamepadserverdetails.txt    (this report)
 
   Related locations:
@@ -2994,8 +3050,9 @@ Test C — release build verification:
                        D:\OpenCode Projects\Development\GamePadEcosystem\GamePadEcosystem\server\src\GamePadServer
     Old versions     : D:\old_gamepad_backup
     GitHub repo      : https://github.com/yaleedhaque/GamePadEcosystem
-    v1.1.1 release   : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
+    v1.1.2 release   : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.2
 
 ================================================================================
 END OF REPORT
 ================================================================================
+

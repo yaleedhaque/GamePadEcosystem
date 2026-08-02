@@ -135,9 +135,9 @@ fun defaultXboxLayout(): ControllerLayout = ControllerLayout(
         ButtonLayout("bumper_l", ButtonLayout.ElementType.BUMPER_L, 0.06f, 0.08f, 56, "LB", 0xFF607D8B, true, Protocol.ButtonFlag.LEFT_BUMPER),
         ButtonLayout("bumper_r", ButtonLayout.ElementType.BUMPER_R, 0.94f, 0.08f, 56, "RB", 0xFF607D8B, true, Protocol.ButtonFlag.RIGHT_BUMPER),
 
-        // Triggers — shoulder tabs along the top edge, inside the bumpers
-        ButtonLayout("trigger_l", ButtonLayout.ElementType.TRIGGER_L, 0.17f, 0.09f, 40, "LT", 0xFF607D8B, true),
-        ButtonLayout("trigger_r", ButtonLayout.ElementType.TRIGGER_R, 0.83f, 0.09f, 40, "RT", 0xFF607D8B, true),
+        // Triggers — shoulder tabs below the bumpers (y=0.14 avoids overlap with LB/RB at y=0.08)
+        ButtonLayout("trigger_l", ButtonLayout.ElementType.TRIGGER_L, 0.17f, 0.14f, 40, "LT", 0xFF607D8B, true),
+        ButtonLayout("trigger_r", ButtonLayout.ElementType.TRIGGER_R, 0.83f, 0.14f, 40, "RT", 0xFF607D8B, true),
 
         // Stick-press buttons (L3 / R3) — tucked beside each stick
         ButtonLayout("stick_click_l", ButtonLayout.ElementType.STICK_CLICK_L, 0.06f, 0.45f, 36, "L3", 0xFF455A64, true, Protocol.ButtonFlag.LEFT_STICK),

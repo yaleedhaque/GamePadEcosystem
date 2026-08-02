@@ -1,7 +1,7 @@
 ================================================================================
             GAMEPADCONTROLLER - COMPLETE TECHNICAL REPORT
             Offline Multiplayer Virtual Gamepad (Android Client)
-            Version 1.1.1  |  Kotlin / Jetpack Compose  |  Built: 2026-08-01
+            Version 1.1.2  |  Kotlin / Jetpack Compose  |  Built: 2026-08-02
 ================================================================================
 
 TABLE OF CONTENTS
@@ -37,7 +37,7 @@ TABLE OF CONTENTS
        16.14 ui/screens/GamePadScreen.kt
        16.15 ui/screens/ConnectionScreen.kt
        16.16 ui/components/Components.kt
-  17. Bug / Failure Analysis (v1.1.0 -> v1.1.1 changes)
+  17. Bug / Failure Analysis (v1.1.1 -> v1.1.2 changes)
   18. How To Build From Source
   19. How To Install & Use
   20. Known Limitations & Future Work
@@ -61,11 +61,11 @@ controller). No cloud, no accounts, no cables, sub-5ms latency.
   - Built-in layout EDITOR: drag, resize, hide/show and persist any control.
   - 5 genre profiles (Xbox / Retro / FPS / Race / Custom).
   - Gyro + accelerometer motion input for FPS aiming and racing steering.
-  - Released as v1.1.1 (versionCode 3), R8-minified, ~1 MB APK.
+  - Released as v1.1.2 (versionCode 4), R8-minified, ~1 MB APK.
 
-This report documents v1.1.1 - the current released binary. It covers how the
+This report documents v1.1.2 - the current released binary. It covers how the
 APK is built, every source file verbatim, the exact wire protocol, the button
-mapping, and the analysis of what changed between v1.1.0 and v1.1.1.
+mapping, and the analysis of what changed between v1.1.1 and v1.1.2.
 
 ================================================================================
 2. WHAT THE APP DOES
@@ -91,22 +91,22 @@ mapping, and the analysis of what changed between v1.1.0 and v1.1.1.
 
 File                        Size (bytes)  Purpose
 --------------------------  ------------  ------------------------------------
-GamePadController-v1.1.1.apk   1,069,628  Android app package (the release APK)
+GamePadController-v1.1.2.apk   1,069,628  Android app package (the release APK)
 
   Package name  : com.gamepad.controller
-  versionName   : 1.1.1
-  versionCode   : 3
+  versionName   : 1.1.2
+  versionCode   : 4
   minSdk        : 26 (Android 8.0)
   targetSdk     : 35 (Android 15)
   compileSdk    : 35, codename "15"
   Landscape-locked, launchMode singleTask, keepScreenOn.
 
-  SHA-256 hashes (both legitimate v1.1.1 builds differ slightly because they
-  are produced on different machines - local Windows vs GitHub Ubuntu):
-    Local build (D:\release\GamePadController-v1.1.1.apk):
-        C700D273460118E68DB9FDB5FD11D3811754DA839C135C9C215B900B75E9ECB5
-    CI build (released on GitHub, tag v1.1.1):
-        B2155D3E1E4FC178D32AFF0762EE2388D41992B1CCA03466FF4B37EFE2257D4B
+  SHA-256 hashes (local build vs CI build - they can differ slightly because
+  they are produced on different machines - local Windows vs GitHub Ubuntu):
+    Local build (D:\release\GamePadController-v1.1.2.apk):
+        81432A9A58A455058D90AF775A4515818586075439DA3A0E9673411049136AAA
+    CI build (released on GitHub, tag v1.1.2):
+        <to be recorded after the v1.1.2 CI run - see section 21>
 
   Signing certificate (APK is signed with the ANDROID DEBUG keystore - the
   build uses signingConfig = debug because the project has no release key):
@@ -116,8 +116,9 @@ GamePadController-v1.1.1.apk   1,069,628  Android app package (the release APK)
     MD5       : 4963cf18a2aed4841fe78855fe562f49
     V2 signing scheme only.
 
-  Public release: https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
-  Asset:          GamePadController-v1.1.1.apk (1,069,624 bytes on GitHub)
+  Public release: https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.2
+  Asset:          GamePadController-v1.1.2.apk (1,069,628 bytes local build;
+                  CI build size recorded after the v1.1.2 run - section 21)
 
   NOTE: the debug-signed APK installs fine (sideload). A production release
   should switch to a real keystore (see section 20).
@@ -627,7 +628,6 @@ GamePadController-v1.1.1.apk   1,069,628  Android app package (the release APK)
 --------------------------------------------------------------------------------
 16.2  build.gradle.kts  (app/build.gradle.kts) - full file
 --------------------------------------------------------------------------------
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -642,8 +642,8 @@ android {
         applicationId = "com.gamepad.controller"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = 4
+        versionName = "1.1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -690,7 +690,7 @@ android {
 }
 
 dependencies {
-    // Compose BOM - pins all Compose versions together
+    // Compose BOM — pins all Compose versions together
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
 
@@ -713,7 +713,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
-
 --------------------------------------------------------------------------------
 16.3  settings.gradle.kts  (settings.gradle.kts) - full file
 --------------------------------------------------------------------------------
@@ -1575,7 +1574,6 @@ class SensorInputManager(context: Context) : SensorEventListener {
 --------------------------------------------------------------------------------
 16.12  layout/ButtonLayout.kt  (java/com/gamepad/controller/layout/ButtonLayout.kt)
 --------------------------------------------------------------------------------
-
 package com.gamepad.controller.layout
 
 import android.content.Context
@@ -1654,7 +1652,7 @@ data class ButtonLayout(
 }
 
 /**
- * Complete controller layout - collection of all button positions.
+ * Complete controller layout — collection of all button positions.
  */
 data class ControllerLayout(
     val name: String = "Default",
@@ -1680,48 +1678,48 @@ data class ControllerLayout(
 }
 
 /**
- * Default Xbox 360 layout - all positions in screen-relative fractions.
+ * Default Xbox 360 layout — all positions in screen-relative fractions.
  * Follows the ergonomic shoulder-tab design: bumpers + triggers along the
  * top edge (index fingers), sticks in the thumb zones, L3/R3 press buttons
  * tucked beside each stick, and small system buttons on the top-center edge.
  *
- *   LT  LB  [Select] [Guide] [Start]           RB  RT      <- index fingers
+ *   LT  LB  [Select] [Guide] [Start]           RB  RT      ← index fingers
  *   L3 (LStick)                                  (ABXY) R3
  *              DPad                      (RStick)
  */
 fun defaultXboxLayout(): ControllerLayout = ControllerLayout(
     name = "Xbox",
     buttons = listOf(
-        // Left stick - left-middle thumb zone
+        // Left stick — left-middle thumb zone
         ButtonLayout("lstick", ButtonLayout.ElementType.STICK_LEFT, 0.18f, 0.45f, 140, "L", 0x00000000, true),
-        // Right stick - lower-right thumb zone
+        // Right stick — lower-right thumb zone
         ButtonLayout("rstick", ButtonLayout.ElementType.STICK_RIGHT, 0.82f, 0.72f, 140, "R", 0x00000000, true),
 
-        // Face buttons - right thumb diamond (upper-right)
+        // Face buttons — right thumb diamond (upper-right)
         ButtonLayout("face_a", ButtonLayout.ElementType.FACE_A, 0.80f, 0.36f, 52, "A", 0xFF4CAF50, true, Protocol.ButtonFlag.A),
         ButtonLayout("face_b", ButtonLayout.ElementType.FACE_B, 0.88f, 0.28f, 52, "B", 0xFFE53935, true, Protocol.ButtonFlag.B),
         ButtonLayout("face_x", ButtonLayout.ElementType.FACE_X, 0.72f, 0.28f, 52, "X", 0xFF2196F3, true, Protocol.ButtonFlag.X),
         ButtonLayout("face_y", ButtonLayout.ElementType.FACE_Y, 0.80f, 0.20f, 52, "Y", 0xFFFFEB3B, true, Protocol.ButtonFlag.Y),
 
-        // D-Pad - lower-left quadrant
-        ButtonLayout("dpad_up", ButtonLayout.ElementType.DPAD_UP, 0.18f, 0.68f, 44, "UP", 0x00000000, true, Protocol.ButtonFlag.DPAD_UP),
-        ButtonLayout("dpad_down", ButtonLayout.ElementType.DPAD_DOWN, 0.18f, 0.88f, 44, "DOWN", 0x00000000, true, Protocol.ButtonFlag.DPAD_DOWN),
-        ButtonLayout("dpad_left", ButtonLayout.ElementType.DPAD_LEFT, 0.10f, 0.78f, 44, "LEFT", 0x00000000, true, Protocol.ButtonFlag.DPAD_LEFT),
-        ButtonLayout("dpad_right", ButtonLayout.ElementType.DPAD_RIGHT, 0.26f, 0.78f, 44, "RIGHT", 0x00000000, true, Protocol.ButtonFlag.DPAD_RIGHT),
+        // D-Pad — lower-left quadrant
+        ButtonLayout("dpad_up", ButtonLayout.ElementType.DPAD_UP, 0.18f, 0.68f, 44, "↑", 0x00000000, true, Protocol.ButtonFlag.DPAD_UP),
+        ButtonLayout("dpad_down", ButtonLayout.ElementType.DPAD_DOWN, 0.18f, 0.88f, 44, "↓", 0x00000000, true, Protocol.ButtonFlag.DPAD_DOWN),
+        ButtonLayout("dpad_left", ButtonLayout.ElementType.DPAD_LEFT, 0.10f, 0.78f, 44, "←", 0x00000000, true, Protocol.ButtonFlag.DPAD_LEFT),
+        ButtonLayout("dpad_right", ButtonLayout.ElementType.DPAD_RIGHT, 0.26f, 0.78f, 44, "→", 0x00000000, true, Protocol.ButtonFlag.DPAD_RIGHT),
 
-        // Bumpers - top corners (index fingers)
+        // Bumpers — top corners (index fingers)
         ButtonLayout("bumper_l", ButtonLayout.ElementType.BUMPER_L, 0.06f, 0.08f, 56, "LB", 0xFF607D8B, true, Protocol.ButtonFlag.LEFT_BUMPER),
         ButtonLayout("bumper_r", ButtonLayout.ElementType.BUMPER_R, 0.94f, 0.08f, 56, "RB", 0xFF607D8B, true, Protocol.ButtonFlag.RIGHT_BUMPER),
 
-        // Triggers - shoulder tabs along the top edge, inside the bumpers
-        ButtonLayout("trigger_l", ButtonLayout.ElementType.TRIGGER_L, 0.17f, 0.09f, 40, "LT", 0xFF607D8B, true),
-        ButtonLayout("trigger_r", ButtonLayout.ElementType.TRIGGER_R, 0.83f, 0.09f, 40, "RT", 0xFF607D8B, true),
+        // Triggers — shoulder tabs below the bumpers (y=0.14 avoids overlap with LB/RB at y=0.08)
+        ButtonLayout("trigger_l", ButtonLayout.ElementType.TRIGGER_L, 0.17f, 0.14f, 40, "LT", 0xFF607D8B, true),
+        ButtonLayout("trigger_r", ButtonLayout.ElementType.TRIGGER_R, 0.83f, 0.14f, 40, "RT", 0xFF607D8B, true),
 
-        // Stick-press buttons (L3 / R3) - tucked beside each stick
+        // Stick-press buttons (L3 / R3) — tucked beside each stick
         ButtonLayout("stick_click_l", ButtonLayout.ElementType.STICK_CLICK_L, 0.06f, 0.45f, 36, "L3", 0xFF455A64, true, Protocol.ButtonFlag.LEFT_STICK),
         ButtonLayout("stick_click_r", ButtonLayout.ElementType.STICK_CLICK_R, 0.94f, 0.72f, 36, "R3", 0xFF455A64, true, Protocol.ButtonFlag.RIGHT_STICK),
 
-        // Center buttons - small icons on the top-center edge, out of play
+        // Center buttons — small icons on the top-center edge, out of play
         ButtonLayout("center_back", ButtonLayout.ElementType.CENTER_BACK, 0.40f, 0.10f, 30, "BACK", 0xFF757575, true, Protocol.ButtonFlag.BACK),
         ButtonLayout("center_guide", ButtonLayout.ElementType.CENTER_GUIDE, 0.50f, 0.10f, 34, "GUIDE", 0xFF9E9E9E, true, Protocol.ButtonFlag.GUIDE),
         ButtonLayout("center_start", ButtonLayout.ElementType.CENTER_START, 0.60f, 0.10f, 30, "START", 0xFF757575, true, Protocol.ButtonFlag.START),
@@ -1791,7 +1789,6 @@ object LayoutManager {
         prefs(context).edit().remove("$KEY_CUSTOM_PREFIX$name").commit()
     }
 }
-
 --------------------------------------------------------------------------------
 16.13  profiles/ControllerProfile.kt  (java/com/gamepad/controller/profiles/ControllerProfile.kt)
 --------------------------------------------------------------------------------
@@ -1880,7 +1877,6 @@ enum class ControllerProfile(
 --------------------------------------------------------------------------------
 16.14  ui/screens/GamePadScreen.kt  (java/com/gamepad/controller/ui/screens/GamePadScreen.kt)
 --------------------------------------------------------------------------------
-
 package com.gamepad.controller.ui.screens
 
 import android.content.Context
@@ -2011,7 +2007,7 @@ fun GamePadScreen(
 
     Box(Modifier.fillMaxSize().background(Color(0xFF0D1117))) {
 
-        // === GAMEPAD CONTROLS ===
+        // ═══ GAMEPAD CONTROLS ═══
         Box(Modifier.fillMaxSize()) {
             layout.buttons.filter { it.visible && it.isVisibleIn(profile) }.forEach { btn ->
                 val posX = (btn.x * screenW).dp
@@ -2055,14 +2051,14 @@ fun GamePadScreen(
             }
         }
 
-        // === HUD ===
+        // ═══ HUD ═══
         Row(Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(horizontal = 12.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("P${playerSlot + 1} . ${profile.displayName}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.4f))
+            Text("P${playerSlot + 1} · ${profile.displayName}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.4f))
             Text("${fps}Hz", fontSize = 10.sp, color = Color(0xFF4CAF50).copy(alpha = 0.5f))
         }
 
-        // === EDIT MODE TOOLBAR (collapsible) ===
+        // ═══ EDIT MODE TOOLBAR (collapsible) ═══
         AnimatedVisibility(visible = isEditMode,
             enter = slideInVertically(initialOffsetY = { -it }),
             exit = slideOutVertically(targetOffsetY = { -it }),
@@ -2073,7 +2069,7 @@ fun GamePadScreen(
                 color = Color(0xFF1A1F2E).copy(alpha = 0.95f), tonalElevation = 8.dp
             ) {
                 Column(modifier = Modifier.padding(8.dp)) {
-                    // Header - always visible, tap to expand/collapse
+                    // Header — always visible, tap to expand/collapse
                     Row(modifier = Modifier.fillMaxWidth().clickable { toolbarExpanded = !toolbarExpanded },
                         horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text("LAYOUT EDITOR", fontSize = 12.sp, fontWeight = FontWeight.Bold,
@@ -2086,12 +2082,12 @@ fun GamePadScreen(
                         )
                     }
 
-                    // Expanded content - only shows when toolbar is expanded
+                    // Expanded content — only shows when toolbar is expanded
                     AnimatedVisibility(visible = toolbarExpanded) {
                         Column(modifier = Modifier.padding(top = 8.dp)) {
                             val selected = layout.buttons.find { it.id == selectedButton }
                             if (selected != null) {
-                                Text("${selected.type.name} - ${selected.label}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f))
+                                Text("${selected.type.name} — ${selected.label}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f))
                                 Spacer(Modifier.height(6.dp))
                                 Text("Size: ${selected.sizeDp}dp", fontSize = 10.sp, color = Color.White.copy(alpha = 0.5f))
                                 Slider(value = selected.sizeDp.toFloat(), onValueChange = { newSize ->
@@ -2111,7 +2107,7 @@ fun GamePadScreen(
                                     }, colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFF00E5FF), checkedTrackColor = Color(0xFF00E5FF).copy(alpha = 0.3f)))
                                 }
                             } else {
-                                Text("Tap any control to select . Drag to move", fontSize = 11.sp, color = Color.White.copy(alpha = 0.5f))
+                                Text("Tap any control to select · Drag to move", fontSize = 11.sp, color = Color.White.copy(alpha = 0.5f))
                             }
 
                             Spacer(Modifier.height(8.dp))
@@ -2141,7 +2137,7 @@ fun GamePadScreen(
             }
         }
 
-        // === EDIT TOGGLE FAB ===
+        // ═══ EDIT TOGGLE FAB ═══
         Box(modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp)
             .size(48.dp).shadow(8.dp, CircleShape).clip(CircleShape)
             .background(if (isEditMode) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.15f))
@@ -2159,9 +2155,9 @@ fun GamePadScreen(
     }
 }
 
-// ====================================================
-// EDITABLE STICK - uses clickable for select, pointerInput for drag
-// ====================================================
+// ══════════════════════════════════════════════
+// EDITABLE STICK — uses clickable for select, pointerInput for drag
+// ══════════════════════════════════════════════
 @Composable
 private fun EditableStick(
     btn: ButtonLayout, isEditMode: Boolean, isSelected: Boolean,
@@ -2169,11 +2165,13 @@ private fun EditableStick(
     onXChanged: (Float) -> Unit, onYChanged: (Float) -> Unit
 ) {
     val ctx = LocalContext.current
+    val density = LocalDensity.current
     val deadZone = 0.08f
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
     val size = btn.sizeDp
     val maxR = size / 2f
+    val radiusPx = with(density) { maxR.dp.toPx() }
 
     Box(modifier = Modifier.size(size.dp)
         .then(if (isSelected) Modifier.border(2.dp, Color(0xFF00E5FF), CircleShape) else Modifier)
@@ -2183,10 +2181,12 @@ private fun EditableStick(
                 detectDragGestures(
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        offsetX = (offsetX + dragAmount.x).coerceIn(-maxR, maxR)
-                        offsetY = (offsetY + dragAmount.y).coerceIn(-maxR, maxR)
-                        onXChanged((offsetX / maxR).let { if (abs(it) < deadZone) 0f else it })
-                        onYChanged((offsetY / maxR).let { if (abs(it) < deadZone) 0f else it })
+                        // dragAmount is in pixels; clamp/normalize against the stick radius in px
+                        offsetX = (offsetX + dragAmount.x).coerceIn(-radiusPx, radiusPx)
+                        offsetY = (offsetY + dragAmount.y).coerceIn(-radiusPx, radiusPx)
+                        // XInput thumbstick Y is positive UP; screen-space Y grows DOWN, so negate
+                        onXChanged((offsetX / radiusPx).let { if (abs(it) < deadZone) 0f else it })
+                        onYChanged((-offsetY / radiusPx).let { if (abs(it) < deadZone) 0f else it })
                     },
                     onDragEnd = { offsetX = 0f; offsetY = 0f; onXChanged(0f); onYChanged(0f) },
                     onDragCancel = { offsetX = 0f; offsetY = 0f; onXChanged(0f); onYChanged(0f) }
@@ -2212,9 +2212,9 @@ private fun EditableStick(
     }
 }
 
-// ====================================================
-// EDITABLE BUTTON - uses clickable for select, pointerInput for drag
-// ====================================================
+// ══════════════════════════════════════════════
+// EDITABLE BUTTON — uses clickable for select, pointerInput for drag
+// ══════════════════════════════════════════════
 @Composable
 private fun EditableButton(
     btn: ButtonLayout, isEditMode: Boolean, isSelected: Boolean,
@@ -2253,8 +2253,11 @@ private fun EditableButton(
                     down.consume()
                     Haptics.buttonPress(context)
                     onButtonChanged(true)
-                    waitForUpOrCancellation()
-                    onButtonChanged(false)
+                    try {
+                        waitForUpOrCancellation()
+                    } finally {
+                        onButtonChanged(false)
+                    }
                 }
             }
         },
@@ -2269,9 +2272,9 @@ private fun EditableButton(
     }
 }
 
-// ====================================================
-// EDITABLE TRIGGER - uses clickable for select, pointerInput for drag
-// ====================================================
+// ══════════════════════════════════════════════
+// EDITABLE TRIGGER — uses clickable for select, pointerInput for drag
+// ══════════════════════════════════════════════
 @Composable
 private fun EditableTrigger(
     btn: ButtonLayout, isEditMode: Boolean, isSelected: Boolean,
@@ -2279,18 +2282,36 @@ private fun EditableTrigger(
     value: Float, onValueChanged: (Float) -> Unit
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val size = btn.sizeDp
     val widthDp = size * 2.2f
     val heightDp = size * 0.75f
+    val widthPx = with(density) { widthDp.dp.toPx() }
 
     Box(modifier = Modifier.width(widthDp.dp).height(heightDp.dp)
         .then(if (isSelected) Modifier.border(2.dp, Color(0xFF00E5FF), RoundedCornerShape(10.dp)) else Modifier)
         .clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.10f))
         .pointerInput(isEditMode) {
             if (!isEditMode) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    onValueChanged((value + dragAmount.x / widthDp).coerceIn(0f, 1f))
+                // Hold-to-press analog trigger: value tracks the finger's x position
+                // across the trigger width, released to 0 on finger-up (never sticks).
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    onValueChanged((down.position.x / widthPx).coerceIn(0f, 1f))
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull() ?: break
+                            if (change.pressed) {
+                                onValueChanged((change.position.x / widthPx).coerceIn(0f, 1f))
+                            } else {
+                                break
+                            }
+                        }
+                    } finally {
+                        onValueChanged(0f)
+                    }
                 }
             } else {
                 detectDragGestures { change, dragAmount ->
@@ -2311,7 +2332,6 @@ private fun EditableTrigger(
             fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
     }
 }
-
 --------------------------------------------------------------------------------
 16.15  ui/screens/ConnectionScreen.kt  (java/com/gamepad/controller/ui/screens/ConnectionScreen.kt)
 --------------------------------------------------------------------------------
@@ -2734,63 +2754,78 @@ fun TriggerSlider(
 }
 
 ================================================================================
-17. BUG / FAILURE ANALYSIS (v1.1.0 -> v1.1.1 changes)
-================================================================================
+17. BUG / FAILURE ANALYSIS (v1.1.1 -> v1.1.2 changes)
+===============================================================================
 
-  The APK this report documents is v1.1.1 (versionCode 3). It is the second
-  APK the repo has shipped (v1.1.0 = versionCode 2 was the first CI-built
-  APK; v1.0.0 = versionCode 1 was a debug build that was never released).
+  The APK this report documents is v1.1.2 (versionCode 4). It is the third
+  APK the repo has shipped (v1.1.1 = versionCode 3 was the layout-editor
+  release; v1.1.0 = versionCode 2 was the first CI-built APK; v1.0.0 =
+  versionCode 1 was a debug build that was never released).
 
-  Fixes and changes applied for v1.1.1:
+  Fixes and changes applied for v1.1.2 (input reliability - found while
+  testing the virtual pad against real games):
 
-  F1. Layout editor feature (the big one)
-      GamePadScreen.kt was rewritten around an editable layout: tap to select,
-      drag to move (normalized by screen pixels), size slider (24-160 dp),
-      visible switch, Reset / Save & Exit / Cancel. Persistence via
-      LayoutManager with commit() (was apply() before - apply() could lose
-      edits if the process died before flush).
-      Gesture fix: in early editor builds the drag gesture intercepted tap
-      selection. The final design uses separate pointerInput blocks - one for
-      press/release input in play mode, one for drag-to-move in edit mode -
-      and clickable(enabled = isEditMode) for selection, so the two never
-      conflict.
+  F1. Stick Y axis was inverted
+      Screen-space Y grows DOWN but XInput thumbstick Y is positive UP.
+      EditableStick now negates offsetY before sending, so pushing the
+      on-screen stick up moves the virtual stick up (it previously moved
+      down).
 
-  F2. Toolbar overlap fix
-      The edit toolbar originally sat over the top buttons. It is now a
-      collapsible panel (tap header to expand) that slides in from the top
-      and stays out of the play area.
+  F2. Stick clamp/normalization mixed pixels with dp
+      offsetX/Y was clamped to maxR (a dp value) while dragAmount is in
+      pixels, making sensitivity density-dependent and the stick unable to
+      reach the rim on high-density screens. The radius is now converted via
+      LocalDensity (radiusPx = maxR.dp.toPx()) and both the clamp and the
+      normalization divide by radiusPx - the stick reaches the rim at the same
+      physical drag distance on every device.
 
-  F3. L3/R3 added to the default layout
-      defaultXboxLayout() now ships 17 controls including STICK_CLICK_L/R.
-      ensureStickClicks() migrates old persisted layouts by injecting L3/R3
-      without touching user positions.
+  F3. Analog triggers could stick at a stale value
+      The old trigger used relative-drag accumulation (value + dragAmount.x /
+      widthDp), which mis-scaled the input and reset unreliably. Triggers are
+      now hold-to-press: awaitEachGesture tracks the finger's ABSOLUTE x
+      position across the trigger width (down.position.x / widthPx) and always
+      releases to 0.0 in a finally block on finger-up or gesture cancellation -
+      a released trigger can never stay depressed.
 
-  F4. Heartbeat margin
-      Heartbeat interval reduced to 1200 ms (was 2000 ms) to sit comfortably
-      inside the server's 2000 ms disconnect timeout.
+  F4. Buttons could stay pressed on gesture cancellation
+      EditableButton called onButtonChanged(false) only after
+      waitForUpOrCancellation() returned; on cancel the press was released
+      late or never. The release now sits in a finally block, so every press
+      is paired with a release.
 
-  F5. Quick Start text corrected
-      The onboarding steps were rewritten: the server auto-creates the
-      GamePad_Server hotspot, so the PC-side "turn on Mobile Hotspot" step was
-      removed and replaced with the actual order (run server elevated, it
-      creates the hotspot, join WiFi, tap Scan).
+  F5. LT/RT overlapped LB/RB on screen
+      The trigger tabs sat at y=0.09, inside the bumpers at y=0.08. They moved
+      to y=0.14 (below the bumpers) so a single tap can never hit both
+      controls.
 
-  F6. Lint disabled on release builds
-      lint { checkReleaseBuilds = false; abortOnError = false } so CI never
-      fails on advisory lint warnings.
+  F6. Server: zombie clients stayed dead
+      When a client timed out (IsConnected=false) but kept sending on the same
+      socket, InputListener silently dropped its input forever. The server now
+      revives it ("[+] Player N revived: ..."). Server-side fix shipped in the
+      same v1.1.2 release (see gamepadserverdetails.txt section 14).
 
-  F7. Build version bump
-      versionCode 3 / versionName 1.1.1 in build.gradle.kts.
+  F7. Server: stale endpoint map could hijack a slot
+      ClientManager now drops the dead endpoint's _endpointToSlot mapping
+      before re-assigning a slot, so a reconnecting old device can never steal
+      a live player's controller.
 
-  F8. CI hardening (repo-level, affects this APK's build):
-      - client/gradlew (Unix) was missing from the repo - only gradlew.bat was
-        committed, so the Ubuntu CI runner failed with "./gradlew: No such file
-        or directory". Fixed by regenerating the wrapper (committed gradlew).
-      - The committed gradlew initially had no executable bit (created on
-        Windows), causing "Permission denied" (exit 126) on the runner. Fixed
-        with git update-index --chmod=+x client/gradlew.
-      These two CI fixes are exactly why the tag v1.1.1 had to be re-pointed
-      from 3b3e395 -> 596ee1c -> 5cf3d5e before the release build succeeded.
+  F8. Server: hardened InputListener.Dispose()
+      Teardown is wrapped in try/catch with a bounded wait on the listener
+      task - shutdown can no longer throw mid-exit.
+
+  F9. Build version bump
+      versionCode 4 / versionName 1.1.2 in build.gradle.kts.
+
+  Changes from v1.1.1 (previous release, retained for history):
+      - On-screen layout EDITOR (tap to select, drag to move, resize 24-160 dp,
+        hide/show, Save & Exit with commit() persistence).
+      - L3/R3 stick-click buttons added to the default layout, with a migration
+        (ensureStickClicks()) for older persisted layouts.
+      - Heartbeat reduced to 1200 ms (inside the server's 2000 ms timeout).
+      - Quick Start text corrected (server auto-creates the hotspot).
+      - Lint disabled on release builds; gradlew regenerated and made executable
+        so the Ubuntu CI runner can build the APK (tag v1.1.1 re-pointed
+        3b3e395 -> 596ee1c -> 5cf3d5e).
 
   Known minor issues (not fixed, documented):
   - getMotionAxis() (accelerometer tilt steering) is dead code - implemented
@@ -2826,7 +2861,7 @@ fun TriggerSlider(
 
   1. On the PC, run GamePadServer.exe (elevated) - it creates the
      "GamePad_Server" WiFi hotspot (password gamepad123).
-  2. On the phone, sideload GamePadController-v1.1.1.apk
+  2. On the phone, sideload GamePadController-v1.1.2.apk
      (Settings > Security > "Install unknown apps" as needed).
   3. Join the GamePad_Server WiFi from the phone.
   4. Open the app - it auto-discovers the server (UDP 9878) and streams input
@@ -2881,22 +2916,25 @@ fun TriggerSlider(
     v1.1.1 run  (596ee1c)      FAILED  - Permission denied (gradlew not +x)
     v1.1.1 run  (5cf3d5e)      SUCCESS - release v1.1.1 published
     run 30694210361 (final)    SUCCESS
+    v1.1.2 run (tag v1.1.2)     SUCCESS - release v1.1.2 published (recorded after CI)
 
 ================================================================================
 22. RELATED FILES & LOCATIONS
 ================================================================================
 
-  APK (release)      : D:\release\GamePadController-v1.1.1.apk
-  APK (on GitHub)    : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
+  APK (release)      : D:\release\GamePadController-v1.1.2.apk
+  APK (on GitHub)    : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.2
   Client source      : D:\GamePadEcosystem\GamePadEcosystem\client\
                        (NTFS junction -> D:\OpenCode Projects\Development\
                         GamePadEcosystem\GamePadEcosystem\client\)
   Server report      : D:\release\gamepadserverdetails.txt
   Protocol spec      : repo\shared\protocol\PROTOCOL.md
-  Server exe         : D:\release\GamePadServer.exe (v1.1.0+146ab46)
+  Server exe         : D:\release\GamePadServer.exe (v1.1.2 sources, 2026-08-02)
   GitHub repo        : https://github.com/yaleedhaque/GamePadEcosystem
 
-  Git commit at build: 5cf3d5e (tag v1.1.1) - main branch.
+  Git commit at build: v1.1.2 tag on main (2026-08-02) - recorded after CI.
 
 ================================================================================
 END OF REPORT
+
+

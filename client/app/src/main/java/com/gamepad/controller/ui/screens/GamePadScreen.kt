@@ -286,11 +286,13 @@ private fun EditableStick(
     onXChanged: (Float) -> Unit, onYChanged: (Float) -> Unit
 ) {
     val ctx = LocalContext.current
+    val density = LocalDensity.current
     val deadZone = 0.08f
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
     val size = btn.sizeDp
     val maxR = size / 2f
+    val radiusPx = with(density) { maxR.dp.toPx() }
 
     Box(modifier = Modifier.size(size.dp)
         .then(if (isSelected) Modifier.border(2.dp, Color(0xFF00E5FF), CircleShape) else Modifier)
@@ -300,10 +302,12 @@ private fun EditableStick(
                 detectDragGestures(
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        offsetX = (offsetX + dragAmount.x).coerceIn(-maxR, maxR)
-                        offsetY = (offsetY + dragAmount.y).coerceIn(-maxR, maxR)
-                        onXChanged((offsetX / maxR).let { if (abs(it) < deadZone) 0f else it })
-                        onYChanged((offsetY / maxR).let { if (abs(it) < deadZone) 0f else it })
+                        // dragAmount is in pixels; clamp/normalize against the stick radius in px
+                        offsetX = (offsetX + dragAmount.x).coerceIn(-radiusPx, radiusPx)
+                        offsetY = (offsetY + dragAmount.y).coerceIn(-radiusPx, radiusPx)
+                        // XInput thumbstick Y is positive UP; screen-space Y grows DOWN, so negate
+                        onXChanged((offsetX / radiusPx).let { if (abs(it) < deadZone) 0f else it })
+                        onYChanged((-offsetY / radiusPx).let { if (abs(it) < deadZone) 0f else it })
                     },
                     onDragEnd = { offsetX = 0f; offsetY = 0f; onXChanged(0f); onYChanged(0f) },
                     onDragCancel = { offsetX = 0f; offsetY = 0f; onXChanged(0f); onYChanged(0f) }
@@ -370,8 +374,11 @@ private fun EditableButton(
                     down.consume()
                     Haptics.buttonPress(context)
                     onButtonChanged(true)
-                    waitForUpOrCancellation()
-                    onButtonChanged(false)
+                    try {
+                        waitForUpOrCancellation()
+                    } finally {
+                        onButtonChanged(false)
+                    }
                 }
             }
         },
@@ -396,18 +403,36 @@ private fun EditableTrigger(
     value: Float, onValueChanged: (Float) -> Unit
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val size = btn.sizeDp
     val widthDp = size * 2.2f
     val heightDp = size * 0.75f
+    val widthPx = with(density) { widthDp.dp.toPx() }
 
     Box(modifier = Modifier.width(widthDp.dp).height(heightDp.dp)
         .then(if (isSelected) Modifier.border(2.dp, Color(0xFF00E5FF), RoundedCornerShape(10.dp)) else Modifier)
         .clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.10f))
         .pointerInput(isEditMode) {
             if (!isEditMode) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    onValueChanged((value + dragAmount.x / widthDp).coerceIn(0f, 1f))
+                // Hold-to-press analog trigger: value tracks the finger's x position
+                // across the trigger width, released to 0 on finger-up (never sticks).
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    onValueChanged((down.position.x / widthPx).coerceIn(0f, 1f))
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull() ?: break
+                            if (change.pressed) {
+                                onValueChanged((change.position.x / widthPx).coerceIn(0f, 1f))
+                            } else {
+                                break
+                            }
+                        }
+                    } finally {
+                        onValueChanged(0f)
+                    }
                 }
             } else {
                 detectDragGestures { change, dragAmount ->

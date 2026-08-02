@@ -47,6 +47,11 @@ public sealed class ClientManager : IDisposable
             {
                 if (!kvp.Value.IsConnected)
                 {
+                    // Drop the dead endpoint's stale mapping first so a returning
+                    // old device can never hijack this slot's controller.
+                    if (kvp.Value.Endpoint != null)
+                        _endpointToSlot.TryRemove(kvp.Value.Endpoint, out _);
+
                     _endpointToSlot[endpoint] = kvp.Key;
                     kvp.Value.Endpoint = endpoint;
                     kvp.Value.DeviceName = deviceName;

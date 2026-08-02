@@ -92,8 +92,19 @@ public sealed class InputListener : IDisposable
         }
 
         var client = _clientManager.GetClient(slot);
-        if (client == null || !client.IsConnected)
+        if (client == null)
             return;
+
+        if (!client.IsConnected)
+        {
+            // Client was marked disconnected after a timeout but is still sending
+            // on the same socket. Revive it instead of silently dropping input,
+            // otherwise the player is a zombie forever until they reconnect the app.
+            client.IsConnected = true;
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"[+] Player {slot + 1} revived: {client.DeviceName} ({remoteEp})");
+            Console.ResetColor();
+        }
 
         client.LastSeen = DateTime.UtcNow;
         client.LastSequence = packet.Sequence;
@@ -129,9 +140,12 @@ public sealed class InputListener : IDisposable
 
     public void Dispose()
     {
-        _cts?.Cancel();
-        _udp?.Close();
-        _udp?.Dispose();
-        _cts?.Dispose();
+        try { _cts?.Cancel(); } catch { }
+        try { _udp?.Close(); } catch { }
+        try { _listenTask?.Wait(1000); } catch { }
+        try { _cts?.Dispose(); } catch { }
+        try { _udp?.Dispose(); } catch { }
+        _cts = null;
+        _udp = null;
     }
 }
