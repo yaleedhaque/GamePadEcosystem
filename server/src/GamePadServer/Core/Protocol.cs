@@ -14,6 +14,7 @@ public static class Protocol
     public const int DiscoveryPort = 9878;
     public const int MaxPlayers = 8;
     public const int DisconnectionTimeoutMs = 2000;
+    public const int ReleaseTimeoutMs = 30000;
     public const int PacketMagic = 0x47504144; // "GPAD" in ASCII
 
     public static readonly byte[] DiscoveryMagic = "GPAD_DISCOVER_V1"u8.ToArray();

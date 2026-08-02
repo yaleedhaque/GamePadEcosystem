@@ -16,6 +16,7 @@ public sealed class ControllerManager : IDisposable
     private readonly IXbox360Controller?[] _controllers = new IXbox360Controller[Protocol.MaxPlayers];
     private readonly bool[] _active = new bool[Protocol.MaxPlayers];
     private readonly DateTime[] _lastInput = new DateTime[Protocol.MaxPlayers];
+    private readonly bool[] _zeroed = new bool[Protocol.MaxPlayers];
     private readonly object[] _locks = new object[Protocol.MaxPlayers];
 
     public ControllerManager()
@@ -177,8 +178,12 @@ public sealed class ControllerManager : IDisposable
     }
 
     /// <summary>
-    /// Checks for timed-out controllers, zeros inputs, and disconnects them.
-    /// Prevents runaway inputs from dropped connections.
+    /// Checks for timed-out controllers and zeros their inputs.
+    /// The virtual device is deliberately KEPT ALIVE — destroying and
+    /// recreating an XInput device makes Windows re-enumerate it and games
+    /// silently remap player slots (observed as a mid-game player swap).
+    /// Devices are only fully released by <see cref="ReleaseStaleControllers"/>
+    /// after a much longer timeout, or on shutdown.
     /// </summary>
     public void CheckDisconnections(TimeSpan timeout)
     {
@@ -186,12 +191,35 @@ public sealed class ControllerManager : IDisposable
         {
             if (_active[i] && (DateTime.UtcNow - _lastInput[i]) > timeout)
             {
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine($"[ViGEm] Player {i + 1} timed out — zeroing and disconnecting controller");
-                Console.ResetColor();
                 ZeroController(i);
-                DestroyController(i);
+                if (!_zeroed[i])
+                {
+                    _zeroed[i] = true;
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.WriteLine($"[ViGEm] Player {i + 1} timed out — inputs zeroed, virtual pad kept alive to preserve player slot");
+                    Console.ResetColor();
+                }
             }
+            else
+            {
+                _zeroed[i] = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fully releases (destroys) virtual controllers that have been idle for
+    /// a long time. Called far less often than the zero-only timeout so a
+    /// brief WiFi blip never churns the device (which would reorder XInput
+    /// indices and swap players in-game). A permanently disconnected phone
+    /// stops leaving a ghost pad after this timeout.
+    /// </summary>
+    public void ReleaseStaleControllers(TimeSpan releaseTimeout)
+    {
+        for (int i = 0; i < Protocol.MaxPlayers; i++)
+        {
+            if (_active[i] && (DateTime.UtcNow - _lastInput[i]) > releaseTimeout)
+                DestroyController(i);
         }
     }
 

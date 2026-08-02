@@ -1,7 +1,7 @@
 ================================================================================
             GAMEPADCONTROLLER - COMPLETE TECHNICAL REPORT
             Offline Multiplayer Virtual Gamepad (Android Client)
-            Version 1.1.2  |  Kotlin / Jetpack Compose  |  Built: 2026-08-02
+            Version 1.1.3  |  Kotlin / Jetpack Compose  |  Built: 2026-08-02
 ================================================================================
 
 TABLE OF CONTENTS
@@ -37,7 +37,7 @@ TABLE OF CONTENTS
        16.14 ui/screens/GamePadScreen.kt
        16.15 ui/screens/ConnectionScreen.kt
        16.16 ui/components/Components.kt
-  17. Bug / Failure Analysis (v1.1.1 -> v1.1.2 changes)
+  17. Bug / Failure Analysis (v1.1.2 -> v1.1.3 changes)
   18. How To Build From Source
   19. How To Install & Use
   20. Known Limitations & Future Work
@@ -53,7 +53,8 @@ Android phone into a wireless Xbox 360 controller for a Windows PC by sending
 raw UDP packets to GamePadServer.exe (which maps them onto a ViGEmBus virtual
 controller). No cloud, no accounts, no cables, sub-5ms latency.
 
-  - Single-activity Jetpack Compose app, landscape-locked, fullscreen.
+  - Single-activity Jetpack Compose app, fullscreen; rotates between both
+    landscape orientations (sensorLandscape - never portrait).
   - Sends 34-byte binary input packets over UDP port 9876 at ~125 Hz.
   - Auto-discovers the server over UDP 9878 (broadcast + direct probes).
   - Full 15-button Xbox 360 mapping: face, D-pad, bumpers, triggers, sticks,
@@ -61,11 +62,11 @@ controller). No cloud, no accounts, no cables, sub-5ms latency.
   - Built-in layout EDITOR: drag, resize, hide/show and persist any control.
   - 5 genre profiles (Xbox / Retro / FPS / Race / Custom).
   - Gyro + accelerometer motion input for FPS aiming and racing steering.
-  - Released as v1.1.2 (versionCode 4), R8-minified, ~1 MB APK.
+  - Released as v1.1.3 (versionCode 5), R8-minified, ~1 MB APK.
 
-This report documents v1.1.2 - the current released binary. It covers how the
+This report documents v1.1.3 - the current released binary. It covers how the
 APK is built, every source file verbatim, the exact wire protocol, the button
-mapping, and the analysis of what changed between v1.1.1 and v1.1.2.
+mapping, and the analysis of what changed between releases.
 
 ================================================================================
 2. WHAT THE APP DOES
@@ -91,22 +92,23 @@ mapping, and the analysis of what changed between v1.1.1 and v1.1.2.
 
 File                        Size (bytes)  Purpose
 --------------------------  ------------  ------------------------------------
-GamePadController-v1.1.2.apk   1,069,628  Android app package (the release APK)
+GamePadController-v1.1.3.apk   1,069,628  Android app package (the release APK)
 
   Package name  : com.gamepad.controller
-  versionName   : 1.1.2
-  versionCode   : 4
+  versionName   : 1.1.3
+  versionCode   : 5
   minSdk        : 26 (Android 8.0)
   targetSdk     : 35 (Android 15)
   compileSdk    : 35, codename "15"
-  Landscape-locked, launchMode singleTask, keepScreenOn.
+  sensorLandscape (rotates between landscape-left and landscape-right, never
+  portrait), launchMode singleTask, keepScreenOn.
 
   SHA-256 hashes (local build vs CI build - they can differ slightly because
   they are produced on different machines - local Windows vs GitHub Ubuntu):
-    Local build (D:\release\GamePadController-v1.1.2.apk):
-        81432A9A58A455058D90AF775A4515818586075439DA3A0E9673411049136AAA
-    CI build (released on GitHub, tag v1.1.2):
-        E258B8428420ECCB655D5DE97DC06DCC33B8691738AA4F92C2CA7E66EDB12300
+    Local build (D:\release\GamePadController-v1.1.3.apk):
+        6EB0A40472DAF57B8864793A1303CD3C3599B1B146F3061EE70E0F7F91C04E2A
+    CI build (released on GitHub, tag v1.1.3):
+        <CI_APK_HASH>
 
   Signing certificate (APK is signed with the ANDROID DEBUG keystore - the
   build uses signingConfig = debug because the project has no release key):
@@ -116,9 +118,9 @@ GamePadController-v1.1.2.apk   1,069,628  Android app package (the release APK)
     MD5       : 4963cf18a2aed4841fe78855fe562f49
     V2 signing scheme only.
 
-  Public release: https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.2
-  Asset:          GamePadController-v1.1.2.apk (1,069,628 bytes local build;
-                  1,069,624 bytes CI build on GitHub)
+  Public release: https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.3
+  Asset:          GamePadController-v1.1.3.apk (1,069,628 bytes local build;
+                  <CI_APK_SIZE> bytes CI build on GitHub)
 
   NOTE: the debug-signed APK installs fine (sideload). A production release
   should switch to a real keystore (see section 20).
@@ -562,7 +564,7 @@ GamePadController-v1.1.2.apk   1,069,628  Android app package (the release APK)
 
   Activity tags:
     exported = true, launchMode = singleTask
-    screenOrientation = landscape, configChanges = orientation|screenSize|keyboardHidden
+    screenOrientation = sensorLandscape, configChanges = orientation|screenSize|keyboardHidden
     keepScreenOn = true, windowSoftInputMode = adjustResize
     Launcher intent (MAIN / LAUNCHER)
 
@@ -611,7 +613,7 @@ GamePadController-v1.1.2.apk   1,069,628  Android app package (the release APK)
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="landscape"
+            android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize"
             android:keepScreenOn="true"
@@ -642,8 +644,8 @@ android {
         applicationId = "com.gamepad.controller"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.1.2"
+        versionCode = 5
+        versionName = "1.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -2754,13 +2756,31 @@ fun TriggerSlider(
 }
 
 ================================================================================
-17. BUG / FAILURE ANALYSIS (v1.1.1 -> v1.1.2 changes)
+17. BUG / FAILURE ANALYSIS (v1.1.2 -> v1.1.3 and v1.1.1 -> v1.1.2 changes)
 ===============================================================================
 
-  The APK this report documents is v1.1.2 (versionCode 4). It is the third
-  APK the repo has shipped (v1.1.1 = versionCode 3 was the layout-editor
-  release; v1.1.0 = versionCode 2 was the first CI-built APK; v1.0.0 =
-  versionCode 1 was a debug build that was never released).
+  The APK this report documents is v1.1.3 (versionCode 5). It is the fourth
+  APK the repo has shipped (v1.1.2 = versionCode 4 was the input-reliability
+  release; v1.1.1 = versionCode 3 was the layout-editor release; v1.1.0 =
+  versionCode 2 was the first CI-built APK; v1.0.0 = versionCode 1 was a debug
+  build that was never released).
+
+  Changes applied for v1.1.3 (screen orientation + player-slot stability):
+
+  F10. Screen now auto-rotates between BOTH landscape orientations
+       android:screenOrientation changed from "landscape" (locked to one side)
+       to "sensorLandscape" - the layout rotates 180° with the phone while
+       still NEVER going portrait (the gamepad UI stays landscape, as the
+       user requested). configChanges already handles orientation|screenSize,
+       so the gamepad session is not destroyed on rotation.
+
+  F11. Server: mid-game player-swap fixed (device keep-alive)
+       The user reported players swapping characters mid-game. Root cause was
+       SERVER-side (see gamepadserverdetails.txt section 14): the 2 s timeout
+       destroyed and recreated the virtual Xbox 360 pad, Windows re-enumerated
+       it, and the game remapped players. The client needed no change; the fix
+       (keep the pad alive through short timeouts) shipped in the same v1.1.3
+       release as the server + APK.
 
   Fixes and changes applied for v1.1.2 (input reliability - found while
   testing the virtual pad against real games):
@@ -2814,7 +2834,7 @@ fun TriggerSlider(
       task - shutdown can no longer throw mid-exit.
 
   F9. Build version bump
-      versionCode 4 / versionName 1.1.2 in build.gradle.kts.
+      versionCode 4 / versionName 1.1.2 in build.gradle.kts (now 5 / 1.1.3).
 
   Changes from v1.1.1 (previous release, retained for history):
       - On-screen layout EDITOR (tap to select, drag to move, resize 24-160 dp,
@@ -2861,7 +2881,7 @@ fun TriggerSlider(
 
   1. On the PC, run GamePadServer.exe (elevated) - it creates the
      "GamePad_Server" WiFi hotspot (password gamepad123).
-  2. On the phone, sideload GamePadController-v1.1.2.apk
+  2. On the phone, sideload GamePadController-v1.1.3.apk
      (Settings > Security > "Install unknown apps" as needed).
   3. Join the GamePad_Server WiFi from the phone.
   4. Open the app - it auto-discovers the server (UDP 9878) and streams input
@@ -2917,22 +2937,23 @@ fun TriggerSlider(
     v1.1.1 run  (5cf3d5e)      SUCCESS - release v1.1.1 published
     run 30694210361 (final)    SUCCESS
     v1.1.2 run  (30743687237)   SUCCESS - release v1.1.2 published (APK + server zip)
+    v1.1.3 run  (<RUN_ID>)      SUCCESS - release v1.1.3 published (APK + server zip)
 
 ================================================================================
 22. RELATED FILES & LOCATIONS
 ================================================================================
 
-  APK (release)      : D:\release\GamePadController-v1.1.2.apk
-  APK (on GitHub)    : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.2
+  APK (release)      : D:\release\GamePadController-v1.1.3.apk
+  APK (on GitHub)    : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.3
   Client source      : D:\GamePadEcosystem\GamePadEcosystem\client\
                        (NTFS junction -> D:\OpenCode Projects\Development\
                         GamePadEcosystem\GamePadEcosystem\client\)
   Server report      : D:\release\gamepadserverdetails.txt
   Protocol spec      : repo\shared\protocol\PROTOCOL.md
-  Server exe         : D:\release\GamePadServer.exe (v1.1.2 sources, 2026-08-02)
+  Server exe         : D:\release\GamePadServer.exe (v1.1.3 sources, 2026-08-02)
   GitHub repo        : https://github.com/yaleedhaque/GamePadEcosystem
 
-  Git commit at build: 9c51905 (tag v1.1.2) - main branch.
+  Git commit at build: <COMMIT> (tag v1.1.3) - main branch.
 
 ================================================================================
 END OF REPORT
