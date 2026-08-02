@@ -122,8 +122,8 @@ server.log                      9,002        Runtime log (created at runtime)
 
   Public releases:
     v1.1.2 (current): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.2
-      Assets: GamePadServer-v1.1.2-win-x64.zip (CI build) and
-              GamePadController-v1.1.2.apk (1,069,628 bytes, local build)
+      Assets: GamePadServer-v1.1.2-win-x64.zip (259,907 bytes, CI build) and
+              GamePadController-v1.1.2.apk (1,069,628 bytes local / 1,069,624 CI)
     v1.1.1 (superseded): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
     v1.1.0 (superseded): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.0
 
@@ -2975,8 +2975,8 @@ Test C — release build verification:
       directly; also stripped CRLF so the shebang resolves on Linux.
     - Final v1.1.1 run 30694210361 = SUCCESS (build-server + build-android +
       release all green; server zip 259,689 bytes, APK 1,069,624 bytes).
-    - v1.1.2 run (tag v1.1.2) = SUCCESS - server zip + APK + release attached
-      (recorded after CI).
+    - v1.1.2 run 30743687237 = SUCCESS (build-server + build-android + release
+      all green; server zip 259,907 bytes, APK 1,069,624 bytes).
 
 ================================================================================
 20. HOW TO BUILD FROM SOURCE

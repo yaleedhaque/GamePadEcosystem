@@ -106,7 +106,7 @@ GamePadController-v1.1.2.apk   1,069,628  Android app package (the release APK)
     Local build (D:\release\GamePadController-v1.1.2.apk):
         81432A9A58A455058D90AF775A4515818586075439DA3A0E9673411049136AAA
     CI build (released on GitHub, tag v1.1.2):
-        <to be recorded after the v1.1.2 CI run - see section 21>
+        E258B8428420ECCB655D5DE97DC06DCC33B8691738AA4F92C2CA7E66EDB12300
 
   Signing certificate (APK is signed with the ANDROID DEBUG keystore - the
   build uses signingConfig = debug because the project has no release key):
@@ -118,7 +118,7 @@ GamePadController-v1.1.2.apk   1,069,628  Android app package (the release APK)
 
   Public release: https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.2
   Asset:          GamePadController-v1.1.2.apk (1,069,628 bytes local build;
-                  CI build size recorded after the v1.1.2 run - section 21)
+                  1,069,624 bytes CI build on GitHub)
 
   NOTE: the debug-signed APK installs fine (sideload). A production release
   should switch to a real keystore (see section 20).
@@ -2916,7 +2916,7 @@ fun TriggerSlider(
     v1.1.1 run  (596ee1c)      FAILED  - Permission denied (gradlew not +x)
     v1.1.1 run  (5cf3d5e)      SUCCESS - release v1.1.1 published
     run 30694210361 (final)    SUCCESS
-    v1.1.2 run (tag v1.1.2)     SUCCESS - release v1.1.2 published (recorded after CI)
+    v1.1.2 run  (30743687237)   SUCCESS - release v1.1.2 published (APK + server zip)
 
 ================================================================================
 22. RELATED FILES & LOCATIONS
@@ -2932,7 +2932,7 @@ fun TriggerSlider(
   Server exe         : D:\release\GamePadServer.exe (v1.1.2 sources, 2026-08-02)
   GitHub repo        : https://github.com/yaleedhaque/GamePadEcosystem
 
-  Git commit at build: v1.1.2 tag on main (2026-08-02) - recorded after CI.
+  Git commit at build: 9c51905 (tag v1.1.2) - main branch.
 
 ================================================================================
 END OF REPORT
