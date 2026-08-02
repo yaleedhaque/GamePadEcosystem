@@ -3023,7 +3023,7 @@ Test C — release build verification:
       release all green; server zip 259,689 bytes, APK 1,069,624 bytes).
     - v1.1.2 run 30743687237 = SUCCESS (build-server + build-android + release
       all green; server zip 259,907 bytes, APK 1,069,624 bytes).
-    - v1.1.3 run <RUN_ID> = SUCCESS (build-server + build-android + release
+    - v1.1.3 run 30747856298 = SUCCESS (build-server + build-android + release
       all green; APK 1,069,628 bytes local).
 
 ================================================================================

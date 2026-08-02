@@ -108,7 +108,7 @@ GamePadController-v1.1.3.apk   1,069,628  Android app package (the release APK)
     Local build (D:\release\GamePadController-v1.1.3.apk):
         6EB0A40472DAF57B8864793A1303CD3C3599B1B146F3061EE70E0F7F91C04E2A
     CI build (released on GitHub, tag v1.1.3):
-        <CI_APK_HASH>
+        60B3A7653227C6C6EBE721E76E86AA10163A67AE207B2F9561CD94067660646C
 
   Signing certificate (APK is signed with the ANDROID DEBUG keystore - the
   build uses signingConfig = debug because the project has no release key):
@@ -120,7 +120,7 @@ GamePadController-v1.1.3.apk   1,069,628  Android app package (the release APK)
 
   Public release: https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.3
   Asset:          GamePadController-v1.1.3.apk (1,069,628 bytes local build;
-                  <CI_APK_SIZE> bytes CI build on GitHub)
+                  1,069,628 bytes CI build on GitHub)
 
   NOTE: the debug-signed APK installs fine (sideload). A production release
   should switch to a real keystore (see section 20).
@@ -2937,7 +2937,7 @@ fun TriggerSlider(
     v1.1.1 run  (5cf3d5e)      SUCCESS - release v1.1.1 published
     run 30694210361 (final)    SUCCESS
     v1.1.2 run  (30743687237)   SUCCESS - release v1.1.2 published (APK + server zip)
-    v1.1.3 run  (<RUN_ID>)      SUCCESS - release v1.1.3 published (APK + server zip)
+    v1.1.3 run  (30747856298)   SUCCESS - release v1.1.3 published (APK + server zip)
 
 ================================================================================
 22. RELATED FILES & LOCATIONS
@@ -2953,7 +2953,7 @@ fun TriggerSlider(
   Server exe         : D:\release\GamePadServer.exe (v1.1.3 sources, 2026-08-02)
   GitHub repo        : https://github.com/yaleedhaque/GamePadEcosystem
 
-  Git commit at build: <COMMIT> (tag v1.1.3) - main branch.
+  Git commit at build: 962bf82 (tag v1.1.3) - main branch.
 
 ================================================================================
 END OF REPORT
