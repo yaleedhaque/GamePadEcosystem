@@ -7,7 +7,9 @@ namespace GamePadEcosystem.Server.VirtualController;
 
 /// <summary>
 /// Manages ViGEmBus virtual Xbox 360 controller instances.
-/// Dynamically creates/destroys virtual controllers as phones connect/disconnect.
+/// Creates a virtual controller on first use per player slot and keeps it
+/// alive for the whole server session (destroying/recreating an XInput device
+/// reorders Windows player indices and swaps players in-game).
 /// Maps binary input packets to native Xbox 360 controller state.
 /// </summary>
 public sealed class ControllerManager : IDisposable
@@ -179,11 +181,11 @@ public sealed class ControllerManager : IDisposable
 
     /// <summary>
     /// Checks for timed-out controllers and zeros their inputs.
-    /// The virtual device is deliberately KEPT ALIVE — destroying and
-    /// recreating an XInput device makes Windows re-enumerate it and games
-    /// silently remap player slots (observed as a mid-game player swap).
-    /// Devices are only fully released by <see cref="ReleaseStaleControllers"/>
-    /// after a much longer timeout, or on shutdown.
+    /// The virtual device is deliberately KEPT ALIVE FOREVER (until shutdown) —
+    /// destroying and recreating an XInput device makes Windows re-enumerate it
+    /// and games silently remap player slots (observed as a mid-game player swap).
+    /// A phone that goes silent only has its inputs zeroed; its pad stays in place
+    /// and is driven again if/when it (or a new phone on the same slot) returns.
     /// </summary>
     public void CheckDisconnections(TimeSpan timeout)
     {
@@ -204,22 +206,6 @@ public sealed class ControllerManager : IDisposable
             {
                 _zeroed[i] = false;
             }
-        }
-    }
-
-    /// <summary>
-    /// Fully releases (destroys) virtual controllers that have been idle for
-    /// a long time. Called far less often than the zero-only timeout so a
-    /// brief WiFi blip never churns the device (which would reorder XInput
-    /// indices and swap players in-game). A permanently disconnected phone
-    /// stops leaving a ghost pad after this timeout.
-    /// </summary>
-    public void ReleaseStaleControllers(TimeSpan releaseTimeout)
-    {
-        for (int i = 0; i < Protocol.MaxPlayers; i++)
-        {
-            if (_active[i] && (DateTime.UtcNow - _lastInput[i]) > releaseTimeout)
-                DestroyController(i);
         }
     }
 

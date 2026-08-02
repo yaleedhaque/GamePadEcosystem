@@ -30,7 +30,7 @@ TABLE OF CONTENTS
   11. How Phones Connect, Discover, And Stream Input
   12. The ViGEmBus Virtual Controller Mapping
   13. Complete Bug / Failure Analysis (why old versions failed)
-  14. The Fixes Applied In v1.1.3 And v1.1.2 (what changed and why)
+  14. The Fixes Applied In v1.1.4, v1.1.3 And v1.1.2 (what changed and why)
   15. Verification & Testing Results (evidence)
   16. Logging System (server.log, 1MB rotation)
   17. Security & Privilege Model (UAC / admin requirements)
@@ -54,16 +54,20 @@ a WiFi hotspot, raw UDP sockets, and the ViGEmBus virtual gamepad driver.
   - It works even when the PC has NO internet at all (virtual loopback adapter).
   - No cloud, no accounts, no cables, sub-5ms latency.
 
-This report documents v1.1.3 — the current fixed, tested, and published release.
-It adds the player-slot stability fix on top of v1.1.2 (the virtual pad is now
-kept alive on a short timeout instead of being destroyed/recreated — see
-section 14) and ships with the matching Android v1.1.3 client (screen auto
-rotation now supports BOTH landscape orientations via sensorLandscape; see
-GamePadControllerDetails.txt). Prior versions were broken: the hotspot never
-started (a malformed PowerShell comment crashed the tethering script) and the
-discovery service flooded logs with phantom devices in an infinite loop (40 MB
-of garbage in one run). Both root causes were found, fixed, and verified in
-v1.1.0; v1.1.1 then shipped the matching Android client (new layout editor) and
+This report documents v1.1.4 — the current fixed, tested, and published release.
+It is a server-only patch on top of v1.1.3 that REMOVES the idle-timeout
+auto-destroy of virtual pads entirely (a pad is kept alive for the whole
+server session, so the XInput player indices — and therefore player numbers in
+games — can never change, no matter how long a phone is silent; see
+section 14). It builds on the v1.1.3 player-slot stability fix (the virtual
+pad is kept alive on a short timeout instead of being destroyed/recreated)
+and ships with the Android v1.1.3 client (screen auto rotation supports BOTH
+landscape orientations via sensorLandscape; see GamePadControllerDetails.txt).
+Prior versions were broken: the hotspot never started (a malformed PowerShell
+comment crashed the tethering script) and the discovery service flooded logs
+with phantom devices in an infinite loop (40 MB of garbage in one run). Both
+root causes were found, fixed, and verified in v1.1.0; v1.1.1 then shipped the
+matching Android client (new layout editor) and
 the first fully successful CI build of both assets; v1.1.2 fixed client input
 reliability (stick/trigger/button) plus server zombie clients. Companion report
 for the Android app: GamePadControllerDetails.txt in this folder.
@@ -79,9 +83,9 @@ for the Android app: GamePadControllerDetails.txt in this folder.
   - Assigns each phone a player slot (1..8).
   - Creates real virtual Xbox 360 controllers via the ViGEmBus kernel driver.
   - Maps every incoming phone button/axis/trigger onto a virtual Xbox 360 pad.
-  - Auto-creates / auto-destroys controllers as phones join or drop (devices
-    are KEPT ALIVE through short timeouts and only fully released after a
-    long idle, so the XInput player index never churns mid-game).
+  - Auto-creates controllers on first use per slot and KEEPS THEM ALIVE until
+    server shutdown (destroying/recreating an XInput device would reorder
+    Windows player indices and swap players in-game — see §14 v1.1.3/v1.1.4).
   - Zeroes all inputs on timeout (2 s) so sticks never "drift" after a phone
     disconnects mid-game.
   - Starts a Windows Mobile Hotspot ("GamePad_Server" / password "gamepad123")
@@ -109,16 +113,18 @@ server.log                      9,002        Runtime log (created at runtime)
   single-file build.
 
   SHA-256 hashes of the shipped release files (2026-08-02, built from the
-  v1.1.3 sources in D:\release):
-    GamePadServer.exe        A7442CE3AF7CDC142904F54858954AB9BFCA55472A6151C5900B0C395E510A07
-    GamePadServer.dll        E275AE68BC176BC1CE2A40F220E2A8986666F29DF7F04761BEDC54BFF5B8B4FA
+  v1.1.4 sources in D:\release):
+    GamePadServer.exe        6FD639262C9ED35E773F3A99FF20E77923A379EB31382FBA7D60110C5A3C24CA
+    GamePadServer.dll        F1C0B8D033B5062B0CEB8DD4384E90F94D2948B6CDE78719942E82186F2D2A0C
     GamePadController-v1.1.3.apk  6EB0A40472DAF57B8864793A1303CD3C3599B1B146F3061EE70E0F7F91C04E2A
+    (client APK unchanged in v1.1.4 — server-only release; SHA256 of the
+     CI-published APK: 60B3A7653227C6C6EBE721E76E86AA10163A67AE207B2F9561CD94067660646C)
 
   Assembly metadata: the deployed GamePadServer.exe/.dll keep the
   FileVersion 1.1.0.0 stamp from v1.1.0 (the csproj Version is not bumped per
-  patch release — same convention as v1.1.1/v1.1.2); the binaries were built from
-  the v1.1.3 sources (ControllerManager.cs keep-alive + Protocol.cs/Program.cs)
-  on 2026-08-02.
+  patch release — same convention as v1.1.1/v1.1.2/v1.1.3); the binaries were
+  built from the v1.1.4 sources (ControllerManager.cs never-auto-destroy +
+  Protocol.cs/Program.cs) on 2026-08-02.
 
   NOTE: this folder previously held a stale 16.5 MB DEBUG GamePadController.apk
   (v1.0.0, versionCode 1). It was removed on 2026-08-01; the only APK now is the
@@ -126,9 +132,10 @@ server.log                      9,002        Runtime log (created at runtime)
   in this folder.
 
   Public releases:
-    v1.1.3 (current): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.3
-      Assets: GamePadServer-v1.1.3-win-x64.zip (CI build) and
-              GamePadController-v1.1.3.apk (1,069,628 bytes local)
+    v1.1.4 (current): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.4
+      Assets: GamePadServer-v1.1.4-win-x64.zip (CI build) and
+              GamePadController-v1.1.3.apk (unchanged client)
+    v1.1.3 (superseded): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.3
     v1.1.2 (superseded): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.2
     v1.1.1 (superseded): https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.1
 
@@ -2306,7 +2313,9 @@ namespace GamePadEcosystem.Server.VirtualController;
 
 /// <summary>
 /// Manages ViGEmBus virtual Xbox 360 controller instances.
-/// Dynamically creates/destroys virtual controllers as phones connect/disconnect.
+/// Creates a virtual controller on first use per player slot and keeps it
+/// alive for the whole server session (destroying/recreating an XInput device
+/// reorders Windows player indices and swaps players in-game).
 /// Maps binary input packets to native Xbox 360 controller state.
 /// </summary>
 public sealed class ControllerManager : IDisposable
@@ -2315,6 +2324,7 @@ public sealed class ControllerManager : IDisposable
     private readonly IXbox360Controller?[] _controllers = new IXbox360Controller[Protocol.MaxPlayers];
     private readonly bool[] _active = new bool[Protocol.MaxPlayers];
     private readonly DateTime[] _lastInput = new DateTime[Protocol.MaxPlayers];
+    private readonly bool[] _zeroed = new bool[Protocol.MaxPlayers];
     private readonly object[] _locks = new object[Protocol.MaxPlayers];
 
     public ControllerManager()
@@ -2476,8 +2486,12 @@ public sealed class ControllerManager : IDisposable
     }
 
     /// <summary>
-    /// Checks for timed-out controllers, zeros inputs, and disconnects them.
-    /// Prevents runaway inputs from dropped connections.
+    /// Checks for timed-out controllers and zeros their inputs.
+    /// The virtual device is deliberately KEPT ALIVE FOREVER (until shutdown) —
+    /// destroying and recreating an XInput device makes Windows re-enumerate it
+    /// and games silently remap player slots (observed as a mid-game player swap).
+    /// A phone that goes silent only has its inputs zeroed; its pad stays in place
+    /// and is driven again if/when it (or a new phone on the same slot) returns.
     /// </summary>
     public void CheckDisconnections(TimeSpan timeout)
     {
@@ -2485,11 +2499,18 @@ public sealed class ControllerManager : IDisposable
         {
             if (_active[i] && (DateTime.UtcNow - _lastInput[i]) > timeout)
             {
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.WriteLine($"[ViGEm] Player {i + 1} timed out — zeroing and disconnecting controller");
-                Console.ResetColor();
                 ZeroController(i);
-                DestroyController(i);
+                if (!_zeroed[i])
+                {
+                    _zeroed[i] = true;
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.WriteLine($"[ViGEm] Player {i + 1} timed out — inputs zeroed, virtual pad kept alive to preserve player slot");
+                    Console.ResetColor();
+                }
+            }
+            else
+            {
+                _zeroed[i] = false;
             }
         }
     }
@@ -2650,7 +2671,8 @@ Explanation:
    f. Prints the READY banner with SSID, password, server IP, ports.
    g. Spawns a watchdog task: every 1 second it
         - marks clients stale after 2 s of no packets (ClientManager)
-        - zeroes + destroys timed-out virtual controllers (ControllerManager)
+        - zeroes timed-out virtual controllers, KEEPING the pad alive
+          (ControllerManager; pads are only destroyed at shutdown)
    h. Enters the main loop: waits for [Q] on the console (polling every 50 ms),
       tolerating environments with no attached console.
    i. On quit: cancels watchdog, disposes HUD, Input, Discovery, Hotspot,
@@ -2758,9 +2780,10 @@ Nefarius.ViGEm.Client (CreateXbox360Controller → Connect). Each packet then:
     LeftTrigger/RightTrigger → LeftTrigger/RightTrigger
 
 Timeout handling: every second, CheckDisconnections() finds slots with no input
-for > 2 s and calls ZeroController() (all buttons off, axes 0, triggers 0)
-then DestroyController() (Disconnect + release). This prevents "ghost inputs"
-or stuck sticks when a phone drops out mid-game.
+for > 2 s and calls ZeroController() (all buttons off, axes 0, triggers 0).
+Since v1.1.3 the virtual device is NEVER destroyed on idle — it is kept alive
+so Windows does not re-enumerate the XInput device and the game does not remap
+player slots. DestroyController() only runs on server shutdown (Dispose).
 
 ================================================================================
 13. COMPLETE BUG / FAILURE ANALYSIS (why old versions failed)
@@ -2816,8 +2839,38 @@ BUG D — Unbounded log file.
   log begins.
 
 ================================================================================
-14. THE FIXES APPLIED IN v1.1.3 AND v1.1.2 (what changed and why)
+14. THE FIXES APPLIED IN v1.1.4, v1.1.3 AND v1.1.2 (what changed and why)
 ===============================================================================
+
+  The v1.1.4 release (server-only) makes pads persist for the whole server
+  session. User feedback after v1.1.3: a 30 s auto-destroy still punishes a
+  phone that is merely idle/paused (bathroom break, screen off) and, once a
+  pad is destroyed, Windows re-enumerates XInput and the game can still remap
+  players. So the "destroy after long idle" cleanup was REMOVED entirely:
+
+  File                                  Change
+  -----------------------------         ----------------------------------------
+  VirtualController/ControllerManager.cs  Removed ReleaseStaleControllers().
+                                         CheckDisconnections(2s) now only ZEROES
+                                         inputs — the virtual pad is KEPT ALIVE
+                                         FOREVER (until server shutdown). Pads
+                                         are created on first use per slot and
+                                         reused; a returning or new phone drives
+                                         the same pad again.
+  Core/Protocol.cs                       Removed ReleaseTimeoutMs constant.
+  Program.cs                             Watchdog no longer calls
+                                         ReleaseStaleControllers().
+
+  Result: Windows XInput device order can never change during a session, so
+  players can NEVER swap, no matter how long a phone is silent. Trade-off: a
+  virtual pad stays listed in Windows until the server exits (at most 8, and
+  the next phone on that slot drives it again — no wasted slots).
+
+  Verified (harness, real ViGEmBus + XInputGetState, Test D): two simulated
+  phones, P1 silent 40 s (longer than the old 30 s destroy timeout) — device
+  count stayed at 2, P2 kept XInput index 1, and after revive P1 came back on
+  index 0. No destruction, no player swap. (Under the old code the count would
+  have dropped to 1.) 5-player regression also PASS.
 
   The v1.1.3 release fixes the mid-game player-swap problem found by the user
   ("in the middle of the game my phone was controlling his character and his
@@ -2832,20 +2885,16 @@ BUG D — Unbounded log file.
   VirtualController/ControllerManager.cs  CheckDisconnections(2s) now only ZEROES
                                          inputs (prevents stick drift) and KEEPS
                                          the virtual pad connected, so its XInput
-                                         index never changes. New
-                                         ReleaseStaleControllers(30s) fully
-                                         destroys devices only after a long idle
-                                         (a dead phone stops leaving a ghost pad).
-                                         Added _zeroed[] to log the timeout
-                                         transition once instead of every second.
-  Core/Protocol.cs                       New ReleaseTimeoutMs = 30000 constant
-                                         (zero-only timeout stays 2000 ms).
-  Program.cs                             Watchdog now also calls
-                                         ReleaseStaleControllers(30s).
-
-  Verified (harness, real ViGEmBus + XInputGetState): with two simulated phones,
-  P1 kept XInput index 0 and P2 kept index 1 across a 6 s P1 silence and revive
-  — device count stayed at 2, no index movement, no swap (Test D).
+                                         index never changes. Added _zeroed[] to
+                                         log the timeout transition once instead
+                                         of every second. (The 30 s
+                                         ReleaseStaleControllers introduced here
+                                         was REMOVED in v1.1.4 — see above.)
+  Core/Protocol.cs                       Added ReleaseTimeoutMs = 30000 constant
+                                         (removed in v1.1.4).
+  Program.cs                             Watchdog also called
+                                         ReleaseStaleControllers(30s)
+                                         (removed in v1.1.4).
 
   The v1.1.2 release fixes input-reliability problems found while testing the
   virtual pad against real games. Server-side changes:
@@ -2919,15 +2968,19 @@ Test C — release build verification:
   - GitHub v1.1.0 release created with both assets; repo push succeeded
     (12481da..15496b4 main -> main).
 
-=Test D — player-swap fix verification (2026-08-02, v1.1.3):
+=Test D — player-slot stability verification (2026-08-02, v1.1.3 + v1.1.4):
   - Two simulated phones (distinct UDP source ports → real ClientManager /
     ControllerManager / InputListener from D:\release\GamePadServer.dll).
   - P1 presses A, P2 presses B; XInputGetState mapped P1 → index 0, P2 → index 1,
     total devices 2.
   - P1 went SILENT for 6 s (watchdog zeroing active). Total devices STAYED 2
-    (device kept alive — with the old code it would have dropped to 1 = the
-    swap bug). P1's A was zeroed. P2 stayed at index 1.
+    (device kept alive — with the old pre-v1.1.3 code it would have dropped to
+    1 = the swap bug). P1's A was zeroed. P2 stayed at index 1.
   - P1 revived → P1 back at index 0, P2 at index 1. NO PLAYER SWAP. PASS.
+  - v1.1.4 addition: P1 went silent for 40 s (longer than the old 30 s
+    auto-destroy timeout). Total devices STAYED 2 (old code would have dropped
+    to 1), P2 stayed at index 1, and P1 revived back onto index 0.
+    NO DESTRUCTION, NO PLAYER SWAP. PASS.
   - Regression: 5-player harness still assigns slots 0-4 and creates 5 pads.
 
 ===============================================================================
@@ -3025,6 +3078,7 @@ Test C — release build verification:
       all green; server zip 259,907 bytes, APK 1,069,624 bytes).
     - v1.1.3 run 30747856298 = SUCCESS (build-server + build-android + release
       all green; APK 1,069,628 bytes local).
+    - v1.1.4 run <RUN_ID> = SUCCESS (server-only release; APK unchanged).
 
 ================================================================================
 20. HOW TO BUILD FROM SOURCE
@@ -3049,12 +3103,12 @@ Test C — release build verification:
      already installed. Verify it runs (Device Manager → Xbox 360 Peripherals,
      or "sc query ViGEmBus").
   2. Install .NET 8 Desktop Runtime (required for the slim build).
-  3. Extract GamePadServer-v1.1.3-win-x64.zip anywhere on the PC.
-  4. Double-click StartServer.bat (or GamePadServer.exe) and accept UAC.
-  5. The server prints the banner, starts the hotspot (auto or loopback-backed),
-     and shows "HOTSPOT ACTIVE: GamePad_Server".
-  6. On each Android phone: enable Wi-Fi, join "GamePad_Server" WiFi
-     (password gamepad123), install + open GamePadController-v1.1.3.apk.
+   3. Extract GamePadServer-v1.1.4-win-x64.zip anywhere on the PC.
+   4. Double-click StartServer.bat (or GamePadServer.exe) and accept UAC.
+   5. The server prints the banner, starts the hotspot (auto or loopback-backed),
+      and shows "HOTSPOT ACTIVE: GamePad_Server".
+   6. On each Android phone: enable Wi-Fi, join "GamePad_Server" WiFi
+      (password gamepad123), install + open GamePadController-v1.1.3.apk.
   7. The app auto-discovers the server (UDP 9878) and starts streaming to
      UDP 9876. Press [Q] in the server console to quit.
 
@@ -3098,6 +3152,7 @@ Test C — release build verification:
                        D:\OpenCode Projects\Development\GamePadEcosystem\GamePadEcosystem\server\src\GamePadServer
     Old versions     : D:\old_gamepad_backup
     GitHub repo      : https://github.com/yaleedhaque/GamePadEcosystem
+    v1.1.4 release   : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.4
     v1.1.3 release   : https://github.com/yaleedhaque/GamePadEcosystem/releases/tag/v1.1.3
 
 ================================================================================

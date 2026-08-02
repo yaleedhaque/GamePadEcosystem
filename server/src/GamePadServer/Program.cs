@@ -105,7 +105,6 @@ internal static class Program
                 {
                     clientManager.RemoveStaleClients(TimeSpan.FromMilliseconds(Protocol.DisconnectionTimeoutMs));
                     controllerManager.CheckDisconnections(TimeSpan.FromMilliseconds(Protocol.DisconnectionTimeoutMs));
-                    controllerManager.ReleaseStaleControllers(TimeSpan.FromMilliseconds(Protocol.ReleaseTimeoutMs));
                     await Task.Delay(1000, watchdogCts.Token);
                 }
                 catch (OperationCanceledException) { break; }

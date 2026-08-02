@@ -2950,7 +2950,7 @@ fun TriggerSlider(
                         GamePadEcosystem\GamePadEcosystem\client\)
   Server report      : D:\release\gamepadserverdetails.txt
   Protocol spec      : repo\shared\protocol\PROTOCOL.md
-  Server exe         : D:\release\GamePadServer.exe (v1.1.3 sources, 2026-08-02)
+  Server exe         : D:\release\GamePadServer.exe (v1.1.4 sources, 2026-08-02)
   GitHub repo        : https://github.com/yaleedhaque/GamePadEcosystem
 
   Git commit at build: 962bf82 (tag v1.1.3) - main branch.
