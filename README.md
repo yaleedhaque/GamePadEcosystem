@@ -237,6 +237,18 @@ GamePadEcosystem/
 
 ---
 
+## Development & History
+
+Full architecture walkthrough, per-file internals, wire-protocol details, known bugs, build/release process, testing harnesses, and the complete changelog (v1.1.0 → v1.1.4) live in:
+
+- **[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)** — everything a contributor or maintainer needs
+
+Also see the complete technical reports committed to `docs/`:
+- `docs/gamepadserverdetails.txt` — server report (verbatim sources, hashes, bug history)
+- `docs/GamePadControllerDetails.txt` — client report (protocol, layout system, profiles)
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
