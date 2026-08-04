@@ -17,10 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/yaleedhaque/GamePadEcosystem/releases/latest">
-    <img src="https://img.shields.io/badge/download-Server.exe-blue?style=for-the-badge&logo=windows" alt="Download Server">
-  </a>
-  <a href="https://github.com/yaleedhaque/GamePadEcosystem/releases/latest">
-    <img src="https://img.shields.io/badge/download-APK-green?style=for-the-badge&logo=android" alt="Download APK">
+    <img src="https://github.com/yaleedhaque/GamePadEcosystem/raw/main/docs/media/demo-placeholder.gif" alt="Demo placeholder" width="640">
   </a>
 </p>
 
@@ -28,7 +25,7 @@
 
 ## What is GamePadEcosystem?
 
-Turn your Android phones into **wireless Xbox 360 controllers** for your Windows PC. No cables, no Bluetooth adapters, no cloud accounts, no subscriptions. Just your phone's WiFi hotspot and this app.
+Turn your Android phones into **wireless Xbox 360 controllers** for your Windows PC. No cables, no Bluetooth adapters, no cloud accounts, no subscriptions. Just your phone's WiFi hotspot and this small server+client pairing.
 
 ```
 ┌──────────────────┐      UDP (sub-5ms)      ┌──────────────────────┐
@@ -105,6 +102,8 @@ Turn your Android phones into **wireless Xbox 360 controllers** for your Windows
 | **Haptic Feedback** | Button press vibration on every touch |
 | **Zero Drift Protection** | Timeout disconnects zero all inputs automatically |
 
+---
+
 ## What's New in v1.1.0
 
 - **Hotspot actually starts.** Fixed a broken PowerShell script inside the server that prevented the Windows hotspot from launching (a `//` comment was being executed as code).
@@ -116,12 +115,11 @@ Turn your Android phones into **wireless Xbox 360 controllers** for your Windows
 
 ## Screenshots
 
-<!-- Add screenshots here -->
-<!-- ![Connection Screen](docs/screenshots/connection.png) -->
-<!-- ![Controller Layout](docs/screenshots/controller.png) -->
-<!-- ![Server HUD](docs/screenshots/server-hud.png) -->
+<p align="center">
+  ![Demo placeholder](docs/media/demo-placeholder.gif)
+</p>
 
-*Contributions welcome — add screenshots of your setup!*
+*Contributions welcome — add screenshots or recordings of your setup!*
 
 ---
 
@@ -223,8 +221,9 @@ GamePadEcosystem/
 │   ├── Network/DiscoveryService  UDP auto-discovery (self-broadcast safe)
 │   ├── Network/InputListener     High-perf UDP receiver
 │   ├── Network/HotspotManager    4-strategy hotspot detection
-│   ├── Network/LoopbackAdapter   Offline hotspot support (virtual NIC)
-│   ├── VirtualController/        ViGEmBus Xbox 360 mapping
+│   │   ├── Network/LoopbackAdapter   Offline hotspot support (virtual NIC)
+│   │   └── VirtualController/        ViGEmBus Xbox 360 mapping
+│   │   └── UI/ServerHud              Real-time console display
 │   └── UI/ServerHud              Real-time console display
 │
 ├── client/app/src/               Android Client (Kotlin/Compose)
