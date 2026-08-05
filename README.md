@@ -271,3 +271,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - Report bugs: [GitHub Issues](https://github.com/yaleedhaque/GamePadEcosystem/issues)
 - Request features: [GitHub Issues](https://github.com/yaleedhaque/GamePadEcosystem/issues)
 - Star this repo if you find it useful
+
+---
+
+**Md. Yaleed Haque** — [GitHub](https://github.com/yaleedhaque) · [Portfolio](https://yaleedhaque.github.io) · yaleedhaque@users.noreply.github.com
